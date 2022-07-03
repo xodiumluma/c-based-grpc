@@ -1,0 +1,3 @@
+# as per https://github.com/bazelbuild/bazel/issues/6319
+# load bazelrc from legacy location
+import %workspace%/tools/bazel.rc

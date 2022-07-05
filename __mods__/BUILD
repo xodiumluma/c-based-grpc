@@ -41,3 +41,31 @@ config_setting(
   name = "grpc_no_binder_define",
   values = {"define": "grpc_no_binder=true"},
 )
+
+config_setting(
+  name = "android",
+  values = {"crosstool_top": "//external:android/crosstool"},
+)
+
+config_setting(
+  name = "ios",
+  values = {"apple_platform_type": "ios"},
+)
+
+selects.config_setting_group(
+  name = "grpc_no_xds",
+  match_any = [
+    ":grpc_no_xds_define",
+    # when we turn off XDS support via --define=grpc_no_xds=true, we also turn it off on mobile OSes where the filesize is important and where it probably won't be used
+    ":android", ":ios",
+  ],
+)
+
+selects.config_setting_group(
+  name = "grpc_no_binder",
+  match_any = [
+    ":grpc_no_binder_define",
+    # iOS doesn't need binder
+    ":ios",
+  ],
+)

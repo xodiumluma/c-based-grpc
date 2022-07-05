@@ -69,3 +69,27 @@ selects.config_setting_group(
     ":ios",
   ],
 )
+
+selects.config_setting_group(
+  name = "grpc_no_rls",
+  match_any = [
+    # we don't need this on mobile OSes and we want to keep filesize down
+    ":android", ":ios",
+  ],
+)
+
+# Fuzzers can be built as fuzzers or tests
+config_setting(
+  name = "grpc_build_fuzzers",
+  values = {"define": "grpc_build_fuzzers=true"},
+)
+
+config_setting(
+  name = "grpc_allow_exceptions",
+  values = {"define": "GRPC_ALLOW_EXCEPTIONS=1"}
+)
+
+config_setting(
+  name = "grpc_disallow_exceptions",
+  values = {"define": "GRPC_ALLOW_EXCEPTIONS=0"},
+)

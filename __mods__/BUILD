@@ -93,3 +93,18 @@ config_setting(
   name = "grpc_disallow_exceptions",
   values = {"define": "GRPC_ALLOW_EXCEPTIONS=0"},
 )
+
+config_setting(
+  name = "remote_execution",
+  values = {"define": "GRPC_PORT_ISOLATED_RUNTIME=1"},
+)
+
+config_setting(
+  name = "windows",
+  values = {"cpu": "x64_windows"}
+)
+
+config_setting(
+  name = "windows_msvc",
+  values = {"cpu": "x64_windows_msvc"},
+)

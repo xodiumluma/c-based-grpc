@@ -183,3 +183,14 @@ GRPC_PUBLIC_EVENT_ENGINE_HDRS = [
   "include/grpc/load_reporting.h",
   "include/grpc/support/workaround_list.h",
 ]
+
+GRPC_PUBLIC_EVENT_ENGINE_HDRS = [
+  "include/grpc/event_engine/endpoint_config.h",
+  "include/grpc/event_engine/event_engine.h",
+  "include/grpc/event_engine/port.h",
+  "include/grpc/event_engine/memory_allocator.h",
+  "include/grpc/event_engine/memory_request.h",
+  "include/grpc/event_engine/internal/memory_allocator_impl.h",
+  "include/grpc/event_engine/slice.h",
+  "include/grpc/event_engine/slice_buffer.h",
+]

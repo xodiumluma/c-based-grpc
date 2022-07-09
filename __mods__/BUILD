@@ -283,4 +283,9 @@ GRPCXX_PUBLIC_HDRS = [
   "include/grpc++/support/channel_arguments.h",
   "include/grpc++/support/config.h",
   "include/grpc++/support/slice.h",
+  "include/grpc++/support/status.h",
+  "include/grpc++/support/status_code_enum.h",
+  "include/grpc++/support/string_ref.h",
+  "include/grpc++/support/stub_options.h",
+  "include/grpc++/support/time.h",
 ]

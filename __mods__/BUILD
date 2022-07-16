@@ -351,3 +351,19 @@ GRPCXX_PUBLIC_HDRS = [
   "include/grpcpp/support/time.h",
   "include/grpcpp/support/validate_service_config.h",
 ]
+
+grpc_cc_library(
+  name = "gpr",
+  language = "c++",
+  public_headers = GPR_PUBLIC_HDRS,
+  standalone = True,
+  tags = [
+    "avoid_dep",
+    "nofixdeps",
+  ],
+  visibility = ["@grpc:public"],
+  deps = [
+    "grp_base",
+  ],
+)
+

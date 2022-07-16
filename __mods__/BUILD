@@ -244,6 +244,8 @@ GRPCXX_HDRS = [
 ]
 
 GRPCXX_PUBLIC_HDRS = [
+  # remember the grpc++ headers are deprecated,
+  # they only exist for backward compatibility
   "include/grpc++/alarm.h",
   "include/grpc++/channel.h",
   "include/grpc++/client_context.h",
@@ -288,6 +290,7 @@ GRPCXX_PUBLIC_HDRS = [
   "include/grpc++/support/string_ref.h",
   "include/grpc++/support/stub_options.h",
   "include/grpc++/support/time.h",
+  # use these grpcpp headers instead!
   "include/grpcpp/alarm.h",
   "include/grpcpp/channel.h",
   "include/grpcpp/client_context.h",

@@ -366,3 +366,26 @@ grpc_cc_library(
     "grp_base",
   ],
 )
+
+grpc_cc_library(
+  name = "channel_fwd",
+  hdrs = [
+    "src/core/lib/chanel/channel_fwd.h",
+  ],
+  language = "c++",
+)
+
+grpc_cc_library(
+  name = "transport_fwd",
+  hdrs = [
+    "src/core/lib/transport_fwd.h",
+  ],
+  language = "c++",
+)
+
+grpc_cc_library(
+  name = "atomic_utils",
+  language = "c++",
+  public_hdrs = ["src/core/lib/gprpp/atomic_utils.h"],
+  deps = ["gpr_platform"],
+)

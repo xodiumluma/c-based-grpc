@@ -8,3 +8,14 @@ load(
   "grpc_upb_proto_reflection_library",
   "python_config_settings",
 )
+load("@bazel_skylib//lib:selects.bzl", "selects")
+
+licenses(["reciprocal"])
+
+package(
+  default_visibility = ["//visibility:public"],
+  features = [
+    "layering_check",
+    "-parse_headers"
+  ]
+)

@@ -19,3 +19,18 @@ package(
     "-parse_headers"
   ]
 )
+
+exports_files([
+  "LICENSE",
+  "etc/roots.pem",
+])
+
+config_setting(
+  name = "grpc_no_ares",
+  values = {"define": "grpc_no_ares=true"}
+)
+
+config_setting(
+  name = "grpc_no_xds_define",
+  values = {"define": "grpc_no_xds=true"},
+)

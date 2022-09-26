@@ -25,20 +25,6 @@
 #include "src/core/lib/transport/http_connect_handshaker.h"
 #include "src/core/lib/transport/tcp_connect_handshaker.h"
 
-extern void grpc_register_extra_plugins(void);
-
-void grpc_client_channel_init(void);
-void grpc_client_channel_shutdown(void);
-void grpc_resolver_dns_ares_init(void);
-void grpc_resolver_dns_ares_shutdown(void);
-
-void grpc_register_built_in_plugins(void) {
-  grpc_register_plugin(grpc_client_channel_init, grpc_client_channel_shutdown);
-  grpc_register_plugin(grpc_resolver_dns_ares_init,
-                       grpc_resolver_dns_ares_shutdown);
-  grpc_register_extra_plugins();
-}
-
 namespace grpc_core {
 
 extern void BuildClientChannelConfiguration(
@@ -68,6 +54,7 @@ extern void RegisterWeightedTargetLbPolicy(CoreConfiguration::Builder* builder);
 extern void RegisterPickFirstLbPolicy(CoreConfiguration::Builder* builder);
 extern void RegisterRoundRobinLbPolicy(CoreConfiguration::Builder* builder);
 extern void RegisterRingHashLbPolicy(CoreConfiguration::Builder* builder);
+extern void RegisterHttpProxyMapper(CoreConfiguration::Builder* builder);
 #ifndef GRPC_NO_RLS
 extern void RegisterRlsLbPolicy(CoreConfiguration::Builder* builder);
 #endif  // !GRPC_NO_RLS
@@ -102,6 +89,7 @@ void BuildCoreConfiguration(CoreConfiguration::Builder* builder) {
   RegisterNativeDnsResolver(builder);
   RegisterSockaddrResolver(builder);
   RegisterFakeResolver(builder);
+  RegisterHttpProxyMapper(builder);
 #ifdef GPR_SUPPORT_BINDER_TRANSPORT
   RegisterBinderResolver(builder);
 #endif

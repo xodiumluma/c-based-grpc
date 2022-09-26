@@ -48,7 +48,6 @@
 
 #include "src/core/lib/debug/stats.h"
 #include "src/core/lib/gpr/string.h"
-#include "src/core/lib/gpr/tls.h"
 #include "src/core/lib/gpr/useful.h"
 #include "src/core/lib/gprpp/manual_constructor.h"
 #include "src/core/lib/iomgr/block_annotate.h"
@@ -57,7 +56,6 @@
 #include "src/core/lib/iomgr/iomgr_internal.h"
 #include "src/core/lib/iomgr/lockfree_event.h"
 #include "src/core/lib/iomgr/wakeup_fd_posix.h"
-#include "src/core/lib/profiling/timers.h"
 
 static grpc_wakeup_fd global_wakeup_fd;
 
@@ -463,8 +461,8 @@ static void fd_has_errors(grpc_fd* fd) { fd->error_closure->SetReady(); }
  * Pollset Definitions
  */
 
-static GPR_THREAD_LOCAL(grpc_pollset*) g_current_thread_pollset;
-static GPR_THREAD_LOCAL(grpc_pollset_worker*) g_current_thread_worker;
+static thread_local grpc_pollset* g_current_thread_pollset;
+static thread_local grpc_pollset_worker* g_current_thread_worker;
 
 /* The designated poller */
 static gpr_atm g_active_poller;
@@ -586,7 +584,6 @@ static void pollset_destroy(grpc_pollset* pollset) {
 }
 
 static grpc_error_handle pollset_kick_all(grpc_pollset* pollset) {
-  GPR_TIMER_SCOPE("pollset_kick_all", 0);
   grpc_error_handle error = GRPC_ERROR_NONE;
   if (pollset->root_worker != nullptr) {
     grpc_pollset_worker* worker = pollset->root_worker;
@@ -618,7 +615,6 @@ static grpc_error_handle pollset_kick_all(grpc_pollset* pollset) {
 static void pollset_maybe_finish_shutdown(grpc_pollset* pollset) {
   if (pollset->shutdown_closure != nullptr && pollset->root_worker == nullptr &&
       pollset->begin_refs == 0) {
-    GPR_TIMER_MARK("pollset_finish_shutdown", 0);
     grpc_core::ExecCtx::Run(DEBUG_LOCATION, pollset->shutdown_closure,
                             GRPC_ERROR_NONE);
     pollset->shutdown_closure = nullptr;
@@ -626,7 +622,6 @@ static void pollset_maybe_finish_shutdown(grpc_pollset* pollset) {
 }
 
 static void pollset_shutdown(grpc_pollset* pollset, grpc_closure* closure) {
-  GPR_TIMER_SCOPE("pollset_shutdown", 0);
   GPR_ASSERT(pollset->shutdown_closure == nullptr);
   GPR_ASSERT(!pollset->shutting_down);
   pollset->shutdown_closure = closure;
@@ -637,7 +632,7 @@ static void pollset_shutdown(grpc_pollset* pollset, grpc_closure* closure) {
 
 static int poll_deadline_to_millis_timeout(grpc_core::Timestamp millis) {
   if (millis == grpc_core::Timestamp::InfFuture()) return -1;
-  int64_t delta = (millis - grpc_core::ExecCtx::Get()->Now()).millis();
+  int64_t delta = (millis - grpc_core::Timestamp::Now()).millis();
   if (delta > INT_MAX) {
     return INT_MAX;
   } else if (delta < 0) {
@@ -656,8 +651,6 @@ static int poll_deadline_to_millis_timeout(grpc_core::Timestamp millis) {
    called by g_active_poller thread. So there is no need for synchronization
    when accessing fields in g_epoll_set */
 static grpc_error_handle process_epoll_events(grpc_pollset* /*pollset*/) {
-  GPR_TIMER_SCOPE("process_epoll_events", 0);
-
   static const char* err_desc = "process_events";
   grpc_error_handle error = GRPC_ERROR_NONE;
   long num_events = gpr_atm_acq_load(&g_epoll_set.num_events);
@@ -709,8 +702,6 @@ static grpc_error_handle process_epoll_events(grpc_pollset* /*pollset*/) {
    no need for any synchronization when accesing fields in g_epoll_set */
 static grpc_error_handle do_epoll_wait(grpc_pollset* ps,
                                        grpc_core::Timestamp deadline) {
-  GPR_TIMER_SCOPE("do_epoll_wait", 0);
-
   int r;
   int timeout = poll_deadline_to_millis_timeout(deadline);
   if (timeout != 0) {
@@ -739,7 +730,6 @@ static grpc_error_handle do_epoll_wait(grpc_pollset* ps,
 static bool begin_worker(grpc_pollset* pollset, grpc_pollset_worker* worker,
                          grpc_pollset_worker** worker_hdl,
                          grpc_core::Timestamp deadline) {
-  GPR_TIMER_SCOPE("begin_worker", 0);
   if (worker_hdl != nullptr) *worker_hdl = worker;
   worker->initialized_cv = false;
   SET_KICK_STATE(worker, UNKICKED);
@@ -862,7 +852,6 @@ static bool begin_worker(grpc_pollset* pollset, grpc_pollset_worker* worker,
 
 static bool check_neighborhood_for_available_poller(
     pollset_neighborhood* neighborhood) {
-  GPR_TIMER_SCOPE("check_neighborhood_for_available_poller", 0);
   bool found_worker = false;
   do {
     grpc_pollset* inspect = neighborhood->active_root;
@@ -885,7 +874,6 @@ static bool check_neighborhood_for_available_poller(
               }
               SET_KICK_STATE(inspect_worker, DESIGNATED_POLLER);
               if (inspect_worker->initialized_cv) {
-                GPR_TIMER_MARK("signal worker", 0);
                 gpr_cv_signal(&inspect_worker->cv);
               }
             } else {
@@ -926,7 +914,6 @@ static bool check_neighborhood_for_available_poller(
 
 static void end_worker(grpc_pollset* pollset, grpc_pollset_worker* worker,
                        grpc_pollset_worker** worker_hdl) {
-  GPR_TIMER_SCOPE("end_worker", 0);
   if (GRPC_TRACE_FLAG_ENABLED(grpc_polling_trace)) {
     gpr_log(GPR_INFO, "PS:%p END_WORKER:%p", pollset, worker);
   }
@@ -1005,7 +992,6 @@ static void end_worker(grpc_pollset* pollset, grpc_pollset_worker* worker,
 static grpc_error_handle pollset_work(grpc_pollset* ps,
                                       grpc_pollset_worker** worker_hdl,
                                       grpc_core::Timestamp deadline) {
-  GPR_TIMER_SCOPE("pollset_work", 0);
   grpc_pollset_worker worker;
   grpc_error_handle error = GRPC_ERROR_NONE;
   static const char* err_desc = "pollset_work";
@@ -1055,7 +1041,6 @@ static grpc_error_handle pollset_work(grpc_pollset* ps,
 
 static grpc_error_handle pollset_kick(grpc_pollset* pollset,
                                       grpc_pollset_worker* specific_worker) {
-  GPR_TIMER_SCOPE("pollset_kick", 0);
   grpc_error_handle ret_err = GRPC_ERROR_NONE;
   if (GRPC_TRACE_FLAG_ENABLED(grpc_polling_trace)) {
     std::vector<std::string> log;

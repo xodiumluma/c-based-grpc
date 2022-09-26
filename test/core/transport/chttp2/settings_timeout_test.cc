@@ -16,29 +16,45 @@
  *
  */
 
+#include <inttypes.h>
+
 #include <functional>
 #include <memory>
 #include <string>
 #include <thread>
-
-#include <gtest/gtest.h>
+#include <vector>
 
 #include "absl/memory/memory.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "gtest/gtest.h"
 
 #include <grpc/grpc.h>
 #include <grpc/grpc_security.h>
+#include <grpc/slice.h>
+#include <grpc/slice_buffer.h>
 #include <grpc/support/alloc.h>
+#include <grpc/support/atm.h>
 #include <grpc/support/log.h>
+#include <grpc/support/sync.h>
+#include <grpc/support/time.h>
 
+#include "src/core/lib/channel/channel_args_preconditioning.h"
+#include "src/core/lib/config/core_configuration.h"
+#include "src/core/lib/event_engine/channel_args_endpoint_config.h"
+#include "src/core/lib/gprpp/time.h"
+#include "src/core/lib/iomgr/closure.h"
 #include "src/core/lib/iomgr/endpoint.h"
 #include "src/core/lib/iomgr/error.h"
+#include "src/core/lib/iomgr/exec_ctx.h"
+#include "src/core/lib/iomgr/iomgr_fwd.h"
 #include "src/core/lib/iomgr/pollset.h"
 #include "src/core/lib/iomgr/pollset_set.h"
 #include "src/core/lib/iomgr/resolve_address.h"
+#include "src/core/lib/iomgr/resolved_address.h"
 #include "src/core/lib/iomgr/tcp_client.h"
 #include "src/core/lib/resource_quota/api.h"
-#include "src/core/lib/slice/slice_internal.h"
 #include "test/core/util/port.h"
 #include "test/core/util/test_config.h"
 
@@ -125,11 +141,11 @@ class Client {
     EventState state;
     auto args = CoreConfiguration::Get()
                     .channel_args_preconditioning()
-                    .PreconditionChannelArgs(nullptr)
-                    .ToC();
-    grpc_tcp_client_connect(state.closure(), &endpoint_, pollset_set,
-                            args.get(), addresses_or->data(),
-                            ExecCtx::Get()->Now() + Duration::Seconds(1));
+                    .PreconditionChannelArgs(nullptr);
+    grpc_tcp_client_connect(
+        state.closure(), &endpoint_, pollset_set,
+        grpc_event_engine::experimental::ChannelArgsEndpointConfig(args),
+        addresses_or->data(), Timestamp::Now() + Duration::Seconds(1));
     ASSERT_TRUE(PollUntilDone(&state, Timestamp::InfFuture()));
     ASSERT_EQ(GRPC_ERROR_NONE, state.error());
     grpc_pollset_set_destroy(pollset_set);
@@ -145,7 +161,7 @@ class Client {
     bool retval = true;
     // Use a deadline of 3 seconds, which is a lot more than we should
     // need for a 1-second timeout, but this helps avoid flakes.
-    Timestamp deadline = ExecCtx::Get()->Now() + Duration::Seconds(3);
+    Timestamp deadline = Timestamp::Now() + Duration::Seconds(3);
     while (true) {
       EventState state;
       grpc_endpoint_read(endpoint_, &read_buffer, state.closure(),
@@ -156,11 +172,11 @@ class Client {
       }
       if (state.error() != GRPC_ERROR_NONE) break;
       gpr_log(GPR_INFO, "client read %" PRIuPTR " bytes", read_buffer.length);
-      grpc_slice_buffer_reset_and_unref_internal(&read_buffer);
+      grpc_slice_buffer_reset_and_unref(&read_buffer);
     }
     grpc_endpoint_shutdown(endpoint_,
                            GRPC_ERROR_CREATE_FROM_STATIC_STRING("shutdown"));
-    grpc_slice_buffer_destroy_internal(&read_buffer);
+    grpc_slice_buffer_destroy(&read_buffer);
     return retval;
   }
 
@@ -209,15 +225,15 @@ class Client {
     while (true) {
       grpc_pollset_worker* worker = nullptr;
       gpr_mu_lock(mu_);
-      GRPC_LOG_IF_ERROR("grpc_pollset_work",
-                        grpc_pollset_work(pollset_, &worker,
-                                          ExecCtx::Get()->Now() +
-                                              Duration::Milliseconds(100)));
+      GRPC_LOG_IF_ERROR(
+          "grpc_pollset_work",
+          grpc_pollset_work(pollset_, &worker,
+                            Timestamp::Now() + Duration::Milliseconds(100)));
       // Flushes any work scheduled before or during polling.
       ExecCtx::Get()->Flush();
       gpr_mu_unlock(mu_);
       if (state != nullptr && state->done()) return true;
-      if (ExecCtx::Get()->Now() >= deadline) return false;
+      if (Timestamp::Now() >= deadline) return false;
     }
   }
 

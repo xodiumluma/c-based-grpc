@@ -35,6 +35,7 @@
 #include "src/core/lib/gprpp/host_port.h"
 #include "src/core/lib/gprpp/thd.h"
 #include "src/core/lib/iomgr/block_annotate.h"
+#include "src/core/lib/iomgr/exec_ctx.h"
 #include "src/core/lib/iomgr/executor.h"
 #include "src/core/lib/iomgr/iomgr_internal.h"
 #include "src/core/lib/iomgr/resolve_address.h"
@@ -184,6 +185,8 @@ DNSResolver::TaskHandle NativeDNSResolver::LookupSRV(
     grpc_pollset_set* /* interested_parties */,
     absl::string_view /* name_server */) {
   GetDefaultEventEngine()->Run([on_resolved] {
+    ApplicationCallbackExecCtx app_exec_ctx;
+    ExecCtx exec_ctx;
     on_resolved(absl::UnimplementedError(
         "The Native resolver does not support looking up SRV records"));
   });
@@ -197,6 +200,8 @@ DNSResolver::TaskHandle NativeDNSResolver::LookupTXT(
     absl::string_view /* name_server */) {
   // Not supported
   GetDefaultEventEngine()->Run([on_resolved] {
+    ApplicationCallbackExecCtx app_exec_ctx;
+    ExecCtx exec_ctx;
     on_resolved(absl::UnimplementedError(
         "The Native resolver does not support looking up TXT records"));
   });

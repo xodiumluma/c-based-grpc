@@ -241,7 +241,7 @@ TEST_F(StatsPluginEnd2EndTest, ErrorCount) {
       grpc::Status status = stub_->Echo(&context, request, &response);
     }
   }
-  absl::SleepFor(absl::Milliseconds(500));
+  absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
   TestUtils::Flush();
 
   // Client side views can be tagged with custom tags.
@@ -328,7 +328,7 @@ TEST_F(StatsPluginEnd2EndTest, RequestReceivedBytesPerRpc) {
     ASSERT_TRUE(status.ok());
     EXPECT_EQ("foo", response.message());
   }
-  absl::SleepFor(absl::Milliseconds(500));
+  absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
   TestUtils::Flush();
 
   EXPECT_THAT(client_received_bytes_per_rpc_view.GetData().distribution_data(),
@@ -376,7 +376,7 @@ TEST_F(StatsPluginEnd2EndTest, Latency) {
   // entire time spent making the RPC.
   const double max_time = absl::ToDoubleMilliseconds(absl::Now() - start_time);
 
-  absl::SleepFor(absl::Milliseconds(500));
+  absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
   TestUtils::Flush();
 
   EXPECT_THAT(
@@ -420,6 +420,54 @@ TEST_F(StatsPluginEnd2EndTest, Latency) {
                                   ::testing::DoubleEq(client_elapsed_time))))));
 }
 
+TEST_F(StatsPluginEnd2EndTest, StartedRpcs) {
+  View client_started_rpcs_view(ClientStartedRpcsCumulative());
+  View server_started_rpcs_view(ServerStartedRpcsCumulative());
+
+  EchoRequest request;
+  request.set_message("foo");
+  EchoResponse response;
+  const int count = 5;
+  for (int i = 0; i < count; ++i) {
+    {
+      grpc::ClientContext context;
+      grpc::Status status = stub_->Echo(&context, request, &response);
+      ASSERT_TRUE(status.ok());
+      EXPECT_EQ("foo", response.message());
+    }
+    absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
+    TestUtils::Flush();
+
+    EXPECT_THAT(client_started_rpcs_view.GetData().int_data(),
+                ::testing::UnorderedElementsAre(::testing::Pair(
+                    ::testing::ElementsAre(client_method_name_), i + 1)));
+    EXPECT_THAT(server_started_rpcs_view.GetData().int_data(),
+                ::testing::UnorderedElementsAre(::testing::Pair(
+                    ::testing::ElementsAre(server_method_name_), i + 1)));
+  }
+
+  // Client should see started calls that are not yet completed.
+  {
+    ClientContext ctx;
+    auto stream = stub_->BidiStream(&ctx);
+    absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
+    TestUtils::Flush();
+    EXPECT_THAT(
+        client_started_rpcs_view.GetData().int_data(),
+        ::testing::Contains(::testing::Pair(
+            ::testing::ElementsAre("grpc.testing.EchoTestService/BidiStream"),
+            1)));
+    EXPECT_THAT(
+        server_started_rpcs_view.GetData().int_data(),
+        ::testing::Contains(::testing::Pair(
+            ::testing::ElementsAre("grpc.testing.EchoTestService/BidiStream"),
+            1)));
+    ctx.TryCancel();
+  }
+  absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
+  TestUtils::Flush();
+}
+
 TEST_F(StatsPluginEnd2EndTest, CompletedRpcs) {
   View client_completed_rpcs_view(ClientCompletedRpcsCumulative());
   View server_completed_rpcs_view(ServerCompletedRpcsCumulative());
@@ -435,7 +483,7 @@ TEST_F(StatsPluginEnd2EndTest, CompletedRpcs) {
       ASSERT_TRUE(status.ok());
       EXPECT_EQ("foo", response.message());
     }
-    absl::SleepFor(absl::Milliseconds(500));
+    absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
     TestUtils::Flush();
 
     EXPECT_THAT(client_completed_rpcs_view.GetData().int_data(),
@@ -452,7 +500,7 @@ TEST_F(StatsPluginEnd2EndTest, CompletedRpcs) {
     auto stream = stub_->BidiStream(&ctx);
     ctx.TryCancel();
   }
-  absl::SleepFor(absl::Milliseconds(500));
+  absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
   TestUtils::Flush();
   EXPECT_THAT(client_completed_rpcs_view.GetData().int_data(),
               ::testing::Contains(::testing::Pair(
@@ -483,7 +531,7 @@ TEST_F(StatsPluginEnd2EndTest, RequestReceivedMessagesPerRpc) {
       ASSERT_TRUE(status.ok());
       EXPECT_EQ("foo", response.message());
     }
-    absl::SleepFor(absl::Milliseconds(500));
+    absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
     TestUtils::Flush();
 
     EXPECT_THAT(
@@ -533,7 +581,7 @@ TEST_F(StatsPluginEnd2EndTest, TestRetryStatsWithoutAdditionalRetries) {
       ASSERT_TRUE(status.ok());
       EXPECT_EQ("foo", response.message());
     }
-    absl::SleepFor(absl::Milliseconds(500));
+    absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
     TestUtils::Flush();
     EXPECT_THAT(
         client_retries_cumulative_view.GetData().int_data(),
@@ -587,7 +635,7 @@ TEST_F(StatsPluginEnd2EndTest, TestRetryStatsWithAdditionalRetries) {
       grpc::Status status = stub_->Echo(&context, request, &response);
       EXPECT_EQ(status.error_code(), StatusCode::ABORTED);
     }
-    absl::SleepFor(absl::Milliseconds(500));
+    absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
     TestUtils::Flush();
     EXPECT_THAT(client_retries_cumulative_view.GetData().int_data(),
                 ::testing::UnorderedElementsAre(
@@ -655,7 +703,7 @@ TEST_F(StatsPluginEnd2EndTest, TestAllSpansAreExported) {
     grpc::Status status = stub_->Echo(&context, request, &response);
     EXPECT_TRUE(status.ok());
   }
-  absl::SleepFor(absl::Milliseconds(500));
+  absl::SleepFor(absl::Milliseconds(500 * grpc_test_slowdown_factor()));
   ::opencensus::trace::exporter::SpanExporterTestPeer::ExportForTesting();
   traces_recorder_->StopRecording();
   auto recorded_spans = traces_recorder_->GetAndClearSpans();

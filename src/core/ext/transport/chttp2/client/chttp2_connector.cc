@@ -22,7 +22,6 @@
 
 #include <stdint.h>
 
-#include <memory>
 #include <string>
 #include <utility>
 
@@ -34,6 +33,7 @@
 #include <grpc/grpc_posix.h>
 #include <grpc/grpc_security.h>
 #include <grpc/impl/codegen/grpc_types.h>
+#include <grpc/slice_buffer.h>
 #include <grpc/status.h>
 #include <grpc/support/alloc.h>
 #include <grpc/support/log.h>
@@ -50,6 +50,7 @@
 #include "src/core/lib/channel/channelz.h"
 #include "src/core/lib/config/core_configuration.h"
 #include "src/core/lib/debug/trace.h"
+#include "src/core/lib/event_engine/channel_args_endpoint_config.h"
 #include "src/core/lib/gprpp/debug_location.h"
 #include "src/core/lib/gprpp/orphanable.h"
 #include "src/core/lib/gprpp/unique_type_name.h"
@@ -60,7 +61,6 @@
 #include "src/core/lib/security/credentials/credentials.h"
 #include "src/core/lib/security/credentials/insecure/insecure_credentials.h"
 #include "src/core/lib/security/security_connector/security_connector.h"
-#include "src/core/lib/slice/slice_internal.h"
 #include "src/core/lib/surface/api_trace.h"
 #include "src/core/lib/surface/channel.h"
 #include "src/core/lib/surface/channel_stack_type.h"
@@ -155,7 +155,7 @@ void Chttp2Connector::OnHandshakeDone(void* arg, grpc_error_handle error) {
           // point this can be removed.
           grpc_endpoint_shutdown(args->endpoint, GRPC_ERROR_REF(error));
           grpc_endpoint_destroy(args->endpoint);
-          grpc_slice_buffer_destroy_internal(args->read_buffer);
+          grpc_slice_buffer_destroy(args->read_buffer);
           gpr_free(args->read_buffer);
         }
       } else {
@@ -401,12 +401,13 @@ grpc_channel* grpc_channel_create_from_fd(const char* target, int fd,
           .PreconditionChannelArgs(args)
           .SetIfUnset(GRPC_ARG_DEFAULT_AUTHORITY, "test.authority")
           .SetObject(creds->Ref());
-  auto c_final_args = final_args.ToC();
 
   int flags = fcntl(fd, F_GETFL, 0);
   GPR_ASSERT(fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0);
-  grpc_endpoint* client = grpc_tcp_client_create_from_fd(
-      grpc_fd_create(fd, "client", true), c_final_args.get(), "fd-client");
+  grpc_endpoint* client = grpc_tcp_create_from_fd(
+      grpc_fd_create(fd, "client", true),
+      grpc_event_engine::experimental::ChannelArgsEndpointConfig(final_args),
+      "fd-client");
   grpc_transport* transport =
       grpc_create_chttp2_transport(final_args, client, true);
   GPR_ASSERT(transport);

@@ -22,7 +22,6 @@
 #include <string.h>
 
 #include <algorithm>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -40,6 +39,7 @@
 #include "src/core/lib/channel/channel_args.h"
 #include "src/core/lib/channel/channel_args_preconditioning.h"
 #include "src/core/lib/config/core_configuration.h"
+#include "src/core/lib/event_engine/channel_args_endpoint_config.h"
 #include "src/core/lib/gprpp/host_port.h"
 #include "src/core/lib/gprpp/memory.h"
 #include "src/core/lib/gprpp/thd.h"
@@ -59,8 +59,6 @@
 #include "src/core/lib/iomgr/tcp_client.h"
 #include "src/core/lib/iomgr/tcp_server.h"
 #include "src/core/lib/slice/b64.h"
-#include "src/core/lib/slice/slice_internal.h"
-#include "src/core/lib/slice/slice_refcount.h"
 #include "test/core/util/port.h"
 
 struct grpc_end2end_http_proxy {
@@ -143,12 +141,12 @@ static void proxy_connection_unref(proxy_connection* conn,
       grpc_endpoint_destroy(conn->server_endpoint);
     }
     grpc_pollset_set_destroy(conn->pollset_set);
-    grpc_slice_buffer_destroy_internal(&conn->client_read_buffer);
-    grpc_slice_buffer_destroy_internal(&conn->client_deferred_write_buffer);
-    grpc_slice_buffer_destroy_internal(&conn->client_write_buffer);
-    grpc_slice_buffer_destroy_internal(&conn->server_read_buffer);
-    grpc_slice_buffer_destroy_internal(&conn->server_deferred_write_buffer);
-    grpc_slice_buffer_destroy_internal(&conn->server_write_buffer);
+    grpc_slice_buffer_destroy(&conn->client_read_buffer);
+    grpc_slice_buffer_destroy(&conn->client_deferred_write_buffer);
+    grpc_slice_buffer_destroy(&conn->client_write_buffer);
+    grpc_slice_buffer_destroy(&conn->server_read_buffer);
+    grpc_slice_buffer_destroy(&conn->server_deferred_write_buffer);
+    grpc_slice_buffer_destroy(&conn->server_write_buffer);
     grpc_http_parser_destroy(&conn->http_parser);
     grpc_http_request_destroy(&conn->http_request);
     gpr_unref(&conn->proxy->users);
@@ -466,7 +464,7 @@ static bool proxy_auth_header_matches(char* proxy_auth_header_val,
   grpc_slice decoded_slice = grpc_base64_decode(proxy_auth_header_val, 0);
   const bool header_matches =
       grpc_slice_str_cmp(decoded_slice, expected_cred) == 0;
-  grpc_slice_unref_internal(decoded_slice);
+  grpc_slice_unref(decoded_slice);
   return header_matches;
 }
 
@@ -552,16 +550,16 @@ static void on_read_request_done_locked(void* arg, grpc_error_handle error) {
   // Connect to requested address.
   // The connection callback inherits our reference to conn.
   const grpc_core::Timestamp deadline =
-      grpc_core::ExecCtx::Get()->Now() + grpc_core::Duration::Seconds(10);
+      grpc_core::Timestamp::Now() + grpc_core::Duration::Seconds(10);
   GRPC_CLOSURE_INIT(&conn->on_server_connect_done, on_server_connect_done, conn,
                     grpc_schedule_on_exec_ctx);
   auto args = grpc_core::CoreConfiguration::Get()
                   .channel_args_preconditioning()
-                  .PreconditionChannelArgs(nullptr)
-                  .ToC();
-  grpc_tcp_client_connect(&conn->on_server_connect_done, &conn->server_endpoint,
-                          conn->pollset_set, args.get(), &(*addresses_or)[0],
-                          deadline);
+                  .PreconditionChannelArgs(nullptr);
+  grpc_tcp_client_connect(
+      &conn->on_server_connect_done, &conn->server_endpoint, conn->pollset_set,
+      grpc_event_engine::experimental::ChannelArgsEndpointConfig(args),
+      &(*addresses_or)[0], deadline);
 }
 
 static void on_read_request_done(void* arg, grpc_error_handle error) {
@@ -616,7 +614,7 @@ static void thread_main(void* arg) {
     gpr_mu_lock(proxy->mu);
     GRPC_LOG_IF_ERROR("grpc_pollset_work",
                       grpc_pollset_work(proxy->pollset[0], &worker,
-                                        grpc_core::ExecCtx::Get()->Now() +
+                                        grpc_core::Timestamp::Now() +
                                             grpc_core::Duration::Seconds(1)));
     gpr_mu_unlock(proxy->mu);
     grpc_core::ExecCtx::Get()->Flush();
@@ -632,13 +630,14 @@ grpc_end2end_http_proxy* grpc_end2end_http_proxy_create(
   proxy->proxy_name = grpc_core::JoinHostPort("localhost", proxy_port);
   gpr_log(GPR_INFO, "Proxy address: %s", proxy->proxy_name.c_str());
   // Create TCP server.
-  proxy->channel_args = grpc_core::CoreConfiguration::Get()
-                            .channel_args_preconditioning()
-                            .PreconditionChannelArgs(args)
-                            .ToC()
-                            .release();
-  grpc_error_handle error =
-      grpc_tcp_server_create(nullptr, proxy->channel_args, &proxy->server);
+  auto channel_args = grpc_core::CoreConfiguration::Get()
+                          .channel_args_preconditioning()
+                          .PreconditionChannelArgs(args);
+  proxy->channel_args = channel_args.ToC().release();
+  grpc_error_handle error = grpc_tcp_server_create(
+      nullptr,
+      grpc_event_engine::experimental::ChannelArgsEndpointConfig(channel_args),
+      &proxy->server);
   GPR_ASSERT(GRPC_ERROR_IS_NONE(error));
   // Bind to port.
   grpc_resolved_address resolved_addr;

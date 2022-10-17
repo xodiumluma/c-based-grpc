@@ -49,3 +49,23 @@ config_setting(
   name = "android",
   values = {"crosstool_top": "//external:android/crosstool"},
 )
+
+config_setting(
+  name = "ios",
+  values = {"apple_platform_type": "ios"},,,,
+)
+
+selects.config_setting_group(
+  name = "grpc_no_xds",
+  match_any = [
+    ":grpc_no_xds_define",
+    # when we set 
+    # --define=grpc_no_xds=true
+    # we are:
+    # a) turning off XDS support
+    # b) turning it off on iOS and Android where it's probably not required
+    # c) reducing the binary footprint
+    ":android",
+    ":ios",
+  ]
+)

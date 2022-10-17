@@ -28,7 +28,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -63,7 +62,6 @@
 #include "src/core/ext/xds/xds_common_types.h"
 #include "src/core/ext/xds/xds_http_filters.h"
 #include "src/core/ext/xds/xds_resource_type.h"
-#include "src/core/ext/xds/xds_resource_type_impl.h"
 #include "src/core/ext/xds/xds_routing.h"
 #include "src/core/lib/channel/status_util.h"
 #include "src/core/lib/debug/trace.h"
@@ -71,19 +69,10 @@
 #include "src/core/lib/gprpp/env.h"
 #include "src/core/lib/gprpp/match.h"
 #include "src/core/lib/gprpp/time.h"
-#include "src/core/lib/iomgr/error.h"
+#include "src/core/lib/gprpp/validation_errors.h"
 #include "src/core/lib/matchers/matchers.h"
 
 namespace grpc_core {
-
-// TODO(yashykt): Remove once RBAC is no longer experimental
-bool XdsRbacEnabled() {
-  auto value = GetEnv("GRPC_XDS_EXPERIMENTAL_RBAC");
-  if (!value.has_value()) return false;
-  bool parsed_value;
-  bool parse_succeeded = gpr_parse_bool_value(value->c_str(), &parsed_value);
-  return parse_succeeded && parsed_value;
-}
 
 // TODO(donnadionne): Remove once RLS is no longer experimental
 bool XdsRlsEnabled() {
@@ -144,7 +133,7 @@ XdsRouteConfigResource::Route::RouteAction::HashPolicy::HashPolicy(
       regex_substitution(other.regex_substitution) {
   if (other.regex != nullptr) {
     regex =
-        absl::make_unique<RE2>(other.regex->pattern(), other.regex->options());
+        std::make_unique<RE2>(other.regex->pattern(), other.regex->options());
   }
 }
 
@@ -155,7 +144,7 @@ XdsRouteConfigResource::Route::RouteAction::HashPolicy::operator=(
   header_name = other.header_name;
   if (other.regex != nullptr) {
     regex =
-        absl::make_unique<RE2>(other.regex->pattern(), other.regex->options());
+        std::make_unique<RE2>(other.regex->pattern(), other.regex->options());
   }
   regex_substitution = other.regex_substitution;
   return *this;
@@ -351,39 +340,47 @@ ClusterSpecifierPluginParse(
           envoy_config_route_v3_RouteConfiguration_cluster_specifier_plugins(
               route_config, &num_cluster_specifier_plugins);
   for (size_t i = 0; i < num_cluster_specifier_plugins; ++i) {
-    const envoy_config_core_v3_TypedExtensionConfig* extension =
+    const envoy_config_core_v3_TypedExtensionConfig* typed_extension_config =
         envoy_config_route_v3_ClusterSpecifierPlugin_extension(
             cluster_specifier_plugin[i]);
     std::string name = UpbStringToStdString(
-        envoy_config_core_v3_TypedExtensionConfig_name(extension));
+        envoy_config_core_v3_TypedExtensionConfig_name(typed_extension_config));
     if (cluster_specifier_plugin_map.find(name) !=
         cluster_specifier_plugin_map.end()) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Duplicated definition of cluster_specifier_plugin ", name));
     }
     const google_protobuf_Any* any =
-        envoy_config_core_v3_TypedExtensionConfig_typed_config(extension);
+        envoy_config_core_v3_TypedExtensionConfig_typed_config(
+            typed_extension_config);
     if (any == nullptr) {
       return absl::InvalidArgumentError(
           "Could not obtrain TypedExtensionConfig for plugin config.");
     }
-    auto plugin_type = ExtractExtensionTypeName(context, any);
-    if (!plugin_type.ok()) return plugin_type.status();
+    ValidationErrors validation_errors;
+    ValidationErrors::ScopedField field(
+        &validation_errors, absl::StrCat(".cluster_specifier_plugins[", i,
+                                         "].extension.typed_config"));
+    auto extension = ExtractXdsExtension(context, any, &validation_errors);
+    if (!validation_errors.ok()) {
+      return validation_errors.status("could not determine extension type");
+    }
+    GPR_ASSERT(extension.has_value());
     bool is_optional = envoy_config_route_v3_ClusterSpecifierPlugin_is_optional(
         cluster_specifier_plugin[i]);
     const XdsClusterSpecifierPluginImpl* cluster_specifier_plugin_impl =
-        XdsClusterSpecifierPluginRegistry::GetPluginForType(plugin_type->type);
+        XdsClusterSpecifierPluginRegistry::GetPluginForType(extension->type);
     std::string lb_policy_config;
     if (cluster_specifier_plugin_impl == nullptr) {
       if (!is_optional) {
         return absl::InvalidArgumentError(absl::StrCat(
-            "Unknown ClusterSpecifierPlugin type ", plugin_type->type));
+            "Unknown ClusterSpecifierPlugin type ", extension->type));
       }
       // Optional plugin, leave lb_policy_config empty.
     } else {
       auto config =
           cluster_specifier_plugin_impl->GenerateLoadBalancingPolicyConfig(
-              google_protobuf_Any_value(any), context.arena, context.symtab);
+              std::move(*extension), context.arena, context.symtab);
       if (!config.ok()) return config.status();
       lb_policy_config = std::move(*config);
     }
@@ -581,7 +578,7 @@ absl::Status RouteRuntimeFractionParse(
       route->matchers.fraction_per_million = numerator;
     }
   }
-  return GRPC_ERROR_NONE;
+  return absl::OkStatus();
 }
 
 template <typename ParentType, typename EntryType>
@@ -627,21 +624,27 @@ ParseTypedPerFilterConfig(
             absl::StrCat("no filter config specified for filter name ", key));
       }
     }
-    auto type = ExtractExtensionTypeName(context, any);
-    if (!type.ok()) return type.status();
+    ValidationErrors errors;
+    ValidationErrors::ScopedField field(
+        &errors, absl::StrCat(".typed_per_filter_config[", key, "]"));
+    auto extension = ExtractXdsExtension(context, any, &errors);
+    if (!errors.ok()) {
+      return errors.status("could not determine extension type");
+    }
+    GPR_ASSERT(extension.has_value());
     const XdsHttpFilterImpl* filter_impl =
-        XdsHttpFilterRegistry::GetFilterForType(type->type);
+        XdsHttpFilterRegistry::GetFilterForType(extension->type);
     if (filter_impl == nullptr) {
       if (is_optional) continue;
-      return absl::InvalidArgumentError(
-          absl::StrCat("no filter registered for config type ", type->type));
+      return absl::InvalidArgumentError(absl::StrCat(
+          "no filter registered for config type ", extension->type));
     }
     absl::StatusOr<XdsHttpFilterImpl::FilterConfig> filter_config =
-        filter_impl->GenerateFilterConfigOverride(
-            google_protobuf_Any_value(any), context.arena);
+        filter_impl->GenerateFilterConfigOverride(std::move(*extension),
+                                                  context.arena);
     if (!filter_config.ok()) {
       return absl::InvalidArgumentError(
-          absl::StrCat("filter config for type ", type->type,
+          absl::StrCat("filter config for type ", extension->type,
                        " failed to parse: ", filter_config.status().message()));
     }
     typed_per_filter_config[std::string(key)] = std::move(*filter_config);
@@ -698,14 +701,23 @@ absl::Status RetryPolicyParse(
       errors.emplace_back(
           "RouteAction RetryPolicy RetryBackoff missing base interval.");
     } else {
+      ValidationErrors validation_errors;
       retry_to_return.retry_back_off.base_interval =
-          ParseDuration(base_interval);
+          ParseDuration(base_interval, &validation_errors);
+      if (!validation_errors.ok()) {
+        errors.emplace_back(
+            validation_errors.status("base_interval").message());
+      }
     }
     const google_protobuf_Duration* max_interval =
         envoy_config_route_v3_RetryPolicy_RetryBackOff_max_interval(backoff);
     Duration max;
     if (max_interval != nullptr) {
-      max = ParseDuration(max_interval);
+      ValidationErrors validation_errors;
+      max = ParseDuration(max_interval, &validation_errors);
+      if (!validation_errors.ok()) {
+        errors.emplace_back(validation_errors.status("max_interval").message());
+      }
     } else {
       // if max interval is not set, it is 10x the base.
       max = 10 * retry_to_return.retry_back_off.base_interval;
@@ -847,7 +859,11 @@ absl::StatusOr<XdsRouteConfigResource::Route::RouteAction> RouteActionParse(
                 max_stream_duration);
       }
       if (duration != nullptr) {
-        route.max_stream_duration = ParseDuration(duration);
+        ValidationErrors validation_errors;
+        route.max_stream_duration = ParseDuration(duration, &validation_errors);
+        if (!validation_errors.ok()) {
+          return validation_errors.status("max_stream_duration");
+        }
       }
     }
   }
@@ -888,7 +904,7 @@ absl::StatusOr<XdsRouteConfigResource::Route::RouteAction> RouteActionParse(
           continue;
         }
         RE2::Options options;
-        policy.regex = absl::make_unique<RE2>(
+        policy.regex = std::make_unique<RE2>(
             UpbStringToStdString(
                 envoy_type_matcher_v3_RegexMatcher_regex(regex_matcher)),
             options);
@@ -1142,9 +1158,8 @@ XdsResourceType::DecodeResult XdsRouteConfigResourceType::Decode(
               context.client, result.name->c_str(),
               rds_update->ToString().c_str());
     }
-    auto resource = absl::make_unique<ResourceDataSubclass>();
-    resource->resource = std::move(*rds_update);
-    result.resource = std::move(resource);
+    result.resource =
+        std::make_unique<XdsRouteConfigResource>(std::move(*rds_update));
   }
   return result;
 }

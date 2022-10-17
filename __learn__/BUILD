@@ -69,3 +69,11 @@ selects.config_setting_group(
     ":ios",
   ]
 )
+
+selects.config_setting_group(
+  name = "grpc_no_binder",
+  match_any = [
+    ":grpc_no_binder_define",
+    ":ios", # no need for binder on iOS
+  ]
+)

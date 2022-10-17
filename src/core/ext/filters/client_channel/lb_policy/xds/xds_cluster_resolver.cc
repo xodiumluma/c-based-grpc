@@ -27,7 +27,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -41,7 +40,6 @@
 
 #include "src/core/ext/filters/client_channel/lb_policy/address_filtering.h"
 #include "src/core/ext/filters/client_channel/lb_policy/child_policy_handler.h"
-#include "src/core/ext/filters/client_channel/lb_policy/outlier_detection/outlier_detection.h"
 #include "src/core/ext/filters/client_channel/lb_policy/ring_hash/ring_hash.h"
 #include "src/core/ext/filters/client_channel/lb_policy/xds/xds.h"
 #include "src/core/ext/filters/client_channel/lb_policy/xds/xds_channel_args.h"
@@ -515,7 +513,7 @@ void XdsClusterResolverLb::LogicalDNSDiscoveryMechanism::Start() {
   resolver_ = CoreConfiguration::Get().resolver_registry().CreateResolver(
       target.c_str(), args, parent()->interested_parties(),
       parent()->work_serializer(),
-      absl::make_unique<ResolverResultHandler>(
+      std::make_unique<ResolverResultHandler>(
           Ref(DEBUG_LOCATION, "LogicalDNSDiscoveryMechanism")));
   if (resolver_ == nullptr) {
     parent()->OnResourceDoesNotExist(
@@ -840,12 +838,12 @@ ServerAddressList XdsClusterResolverLb::CreateChildPolicyAddressesLocked() {
                       kHierarchicalPathAttributeKey,
                       MakeHierarchicalPathAttribute(hierarchical_path))
                   .WithAttribute(kXdsLocalityNameAttributeKey,
-                                 absl::make_unique<XdsLocalityAttribute>(
+                                 std::make_unique<XdsLocalityAttribute>(
                                      locality_name->Ref()))
                   .WithAttribute(
                       ServerAddressWeightAttribute::
                           kServerAddressWeightAttributeKey,
-                      absl::make_unique<ServerAddressWeightAttribute>(weight)));
+                      std::make_unique<ServerAddressWeightAttribute>(weight)));
         }
       }
     }
@@ -952,27 +950,18 @@ XdsClusterResolverLb::CreateChildPolicyConfigLocked() {
         xds_cluster_impl_config["lrsLoadReportingServer"] =
             discovery_config.lrs_load_reporting_server->ToJson();
       }
-      Json locality_picking_policy;
-      if (XdsOutlierDetectionEnabled()) {
-        Json::Object outlier_detection_config;
-        if (discovery_entry.config().outlier_detection_lb_config.has_value()) {
-          outlier_detection_config =
-              discovery_entry.config().outlier_detection_lb_config.value();
-        }
-        outlier_detection_config["childPolicy"] = Json::Array{Json::Object{
-            {"xds_cluster_impl_experimental",
-             std::move(xds_cluster_impl_config)},
-        }};
-        locality_picking_policy = Json::Array{Json::Object{
-            {"outlier_detection_experimental",
-             std::move(outlier_detection_config)},
-        }};
-      } else {
-        locality_picking_policy = Json::Array{Json::Object{
-            {"xds_cluster_impl_experimental",
-             std::move(xds_cluster_impl_config)},
-        }};
+      Json::Object outlier_detection_config;
+      if (discovery_entry.config().outlier_detection_lb_config.has_value()) {
+        outlier_detection_config =
+            discovery_entry.config().outlier_detection_lb_config.value();
       }
+      outlier_detection_config["childPolicy"] = Json::Array{Json::Object{
+          {"xds_cluster_impl_experimental", std::move(xds_cluster_impl_config)},
+      }};
+      Json locality_picking_policy = Json::Array{Json::Object{
+          {"outlier_detection_experimental",
+           std::move(outlier_detection_config)},
+      }};
       // Add priority entry, with the appropriate child name.
       std::string child_name = discovery_entry.GetChildPolicyName(priority);
       priority_priorities.emplace_back(child_name);
@@ -1015,7 +1004,7 @@ XdsClusterResolverLb::CreateChildPolicyConfigLocked() {
         "config");
     channel_control_helper()->UpdateState(
         GRPC_CHANNEL_TRANSIENT_FAILURE, status,
-        absl::make_unique<TransientFailurePicker>(status));
+        std::make_unique<TransientFailurePicker>(status));
     return nullptr;
   }
   return std::move(*config);
@@ -1052,7 +1041,7 @@ XdsClusterResolverLb::CreateChildPolicyLocked(const ChannelArgs& args) {
   lb_policy_args.work_serializer = work_serializer();
   lb_policy_args.args = args;
   lb_policy_args.channel_control_helper =
-      absl::make_unique<Helper>(Ref(DEBUG_LOCATION, "Helper"));
+      std::make_unique<Helper>(Ref(DEBUG_LOCATION, "Helper"));
   OrphanablePtr<LoadBalancingPolicy> lb_policy =
       CoreConfiguration::Get().lb_policy_registry().CreateLoadBalancingPolicy(
           "priority_experimental", std::move(lb_policy_args));
@@ -1090,8 +1079,7 @@ XdsClusterResolverLbConfig::DiscoveryMechanism::JsonLoader(const JsonArgs&) {
           .OptionalField("max_concurrent_requests",
                          &DiscoveryMechanism::max_concurrent_requests)
           .OptionalField("outlierDetection",
-                         &DiscoveryMechanism::outlier_detection_lb_config,
-                         "outlier_detection")
+                         &DiscoveryMechanism::outlier_detection_lb_config)
           .Finish();
   return loader;
 }
@@ -1217,15 +1205,8 @@ class XdsClusterResolverLbFactory : public LoadBalancingPolicyFactory {
           "requires configuration. "
           "Please use loadBalancingConfig field of service config instead.");
     }
-    class XdsJsonArgs : public JsonArgs {
-     public:
-      bool IsEnabled(absl::string_view key) const override {
-        if (key == "outlier_detection") return XdsOutlierDetectionEnabled();
-        return true;
-      }
-    };
     return LoadRefCountedFromJson<XdsClusterResolverLbConfig>(
-        json, XdsJsonArgs(),
+        json, JsonArgs(),
         "errors validating xds_cluster_resolver LB policy config");
   }
 
@@ -1294,7 +1275,7 @@ class XdsClusterResolverLbFactory : public LoadBalancingPolicyFactory {
 
 void RegisterXdsClusterResolverLbPolicy(CoreConfiguration::Builder* builder) {
   builder->lb_policy_registry()->RegisterLoadBalancingPolicyFactory(
-      absl::make_unique<XdsClusterResolverLbFactory>());
+      std::make_unique<XdsClusterResolverLbFactory>());
 }
 
 }  // namespace grpc_core

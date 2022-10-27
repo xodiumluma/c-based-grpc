@@ -16,8 +16,8 @@ package(
   default_visibility = ["//visibility:public"],
   features = [
     "layering_check",
-    "-parse_headers"
-  ]
+    "-parse_headers",
+  ],
 )
 
 exports_files([
@@ -25,9 +25,14 @@ exports_files([
   "etc/roots.pem",
 ])
 
+exports_files(
+  glob(["include/**"]),
+  visibility = ["//:__subpackages__"],
+)
+
 config_setting(
   name = "grpc_no_ares",
-  values = {"define": "grpc_no_ares=true"}
+  values = {"define": "grpc_no_ares=true"},
 )
 
 config_setting(
@@ -52,7 +57,7 @@ config_setting(
 
 config_setting(
   name = "ios",
-  values = {"apple_platform_type": "ios"},,,,
+  values = {"apple_platform_type": "ios"},
 )
 
 selects.config_setting_group(
@@ -75,5 +80,21 @@ selects.config_setting_group(
   match_any = [
     ":grpc_no_binder_define",
     ":ios", # no need for binder on iOS
-  ]
+  ],
+)
+
+selects.config_setting_group(
+  name = "grpc_no_rls",
+  match_any = [
+    # Turning RLS support off on iOS and Android where it's probably not required
+    # Also, reducing the binary footprint
+    ":android",
+    ":ios",
+  ],
+)
+
+# choose to build fuzzers as such or as tests
+config_setting(
+  name = "grpc_build_fuzzers",
+  values = {"define": "grpc_build_fuzzers=true"},
 )

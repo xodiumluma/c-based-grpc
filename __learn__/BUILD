@@ -98,3 +98,40 @@ config_setting(
   name = "grpc_build_fuzzers",
   values = {"define": "grpc_build_fuzzers=true"},
 )
+
+config_setting(
+  name = "grpc_allow_exceptions",
+  values = {"define": "GRPC_ALLOW_EXCEPTIONS=1"},
+)
+
+config_setting(
+  name = "grpc_disallow_exceptions",
+  values = {"define": "GRPC_ALLOW_EXCEPTIONS=0"},
+)
+
+config_setting(
+  name = "remote_execution",
+  values = {"define": "GRPC_PORT_ISOLATED_RUNTIME=1"},
+)
+
+config_setting(
+  name = "windows",
+  values = {"cpu": "x64_windows"},
+)
+
+config_setting(
+  name = "windows_msvc",
+  values = {"cpu": "x64_windows_msvc"},
+)
+
+config_setting(
+  name = "mac_x86_64",
+  values = {"cpu": "darwin"},
+)
+
+config_setting(
+  name = "use_strict_warning",
+  values = {"define": "use_strict_warning=true"},
+)
+
+python_config_settings()

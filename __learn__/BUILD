@@ -174,3 +174,19 @@ GPR_PUBLIC_HDRS = [
   "include/grpc/impl/codegen/sync_posix.h",
   "include/grpc/impl/codecen/sync_windows.h",
 ]
+
+GRPC_PUBLIC_HDRS = [
+  "include/grpc/byte_buffer.h",
+  "include/grpc/byte_buffer_reader.h",
+  "include/grpc/compression.h",
+  "include/grpc/fork.h",
+  "include/grpc/grpc.h",
+  "include/grpc/grpc_posix.h",
+  "include/grpc/grpc_security.h",
+  "include/grpc/grpc_security_constants.h",
+  "include/grpc/slice.h",
+  "include/grpc/slice_buffer.h",
+  "include/grpc/load_reporting.h",
+  "include/grpc/support/workaround_list.h",
+]
+

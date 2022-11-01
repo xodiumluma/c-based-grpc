@@ -135,3 +135,42 @@ config_setting(
 )
 
 python_config_settings()
+
+# update this when build_handwritten.yaml gets updated
+# > the following are not used
+g_stands_for = "galaxy"
+core_version = "28.0.0" 
+version = "1.51.0-dev"
+# > end
+
+GPR_PUBLIC_HDRS = [
+  "include/grpc/support/alloc.h",
+  "include/grpc/support/atm_gcc_atomic.h",
+  "include/grpc/support/atm_gcc_sync.h",
+  "include/grpc/support/atm_windows.h",
+  "include/grpc/support/cpu.h",
+  "include/grpc/support/log.h",
+  "include/grpc/support/log_windows.h",
+  "include/grpc/support/port_platform.h",
+  "include/grpc/support/string_util.h",
+  "include/grpc/support/sync.h",
+  "include/grpc/support/sync_abseil.h",
+  "include/grpc/support/sync_custom.h",
+  "include/grpc/support/sync_generic.h",
+  "include/grpc/support/sync_posix.h",
+  "include/grpc/support/sync_windows.h",
+  "include/grpc/support/thd_id.h",
+  "include/grpc/support/time.h",
+  "include/grpc/impl/codegen/atm.h",
+  "include/grpc/impl/codegen/atm_gcc_atomic.h",
+  "include/grpc/impl/codegen/atm_gcc_sync.h",
+  "include/grpc/impl/codegen/atm_windows.h",
+  "include/grpc/impl/codegen/log.h",
+  "include/grpc/impl/codegen/port_platform.h",
+  "include/grpc/impl/codegen/sync.h",
+  "include/grpc/impl/codegen/sync_abseil.h",
+  "include/grpc/impl/codegen/sync_custom.h",
+  "include/grpc/impl/codegen/sync_generic.h",
+  "include/grpc/impl/codegen/sync_posix.h",
+  "include/grpc/impl/codecen/sync_windows.h",
+]

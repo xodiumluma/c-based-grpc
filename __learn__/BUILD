@@ -197,3 +197,14 @@ GRPC_PUBLIC_HDRS = [
   "include/grpc/impl/codegen/slice.h",
 ]
 
+PC_PUBLIC_EVENT_ENGINE_HDRS = [
+  "include/grpc/event_engine/endpoint_config.h",
+  "include/grpc/event_engine/event_engine.h",
+  "include/grpc/event_engine/port.h",
+  "include/grpc/event_engine/memory_allocator.h",
+  "include/grpc/event_engine/memory_request.h",
+  "include/grpc/event_engine/internal/memory_allocator_impl.h",
+  "include/grpc/event_engine/slice.h",
+  "include/grpc/event_engine/slice_buffer.h",
+]
+

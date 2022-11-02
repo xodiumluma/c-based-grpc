@@ -188,5 +188,12 @@ GRPC_PUBLIC_HDRS = [
   "include/grpc/slice_buffer.h",
   "include/grpc/load_reporting.h",
   "include/grpc/support/workaround_list.h",
+  "include/grpc/impl/codegen/byte_buffer.h",
+  "include/grpc/impl/codegen/byte_buffer_reader.h",
+  "include/grpc/impl/codegen/compression_types.h",
+  "include/grpc/impl/codegen/grpc_types.h",
+  "include/grpc/impl/codegen/propagation_bits.h",
+  "include/grpc/impl/codegen/status.h",
+  "include/grpc/impl/codegen/slice.h",
 ]
 

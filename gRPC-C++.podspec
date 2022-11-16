@@ -22,7 +22,7 @@
 Pod::Spec.new do |s|
   s.name     = 'gRPC-C++'
   # TODO (mxyan): use version that match gRPC version when pod is stabilized
-  version = '1.51.0-dev'
+  version = '1.52.0-dev'
   s.version  = version
   s.summary  = 'gRPC C++ library'
   s.homepage = 'https://grpc.io'
@@ -121,7 +121,6 @@ Pod::Spec.new do |s|
                       'include/grpcpp/impl/codegen/core_codegen_interface.h',
                       'include/grpcpp/impl/codegen/create_auth_context.h',
                       'include/grpcpp/impl/codegen/delegating_channel.h',
-                      'include/grpcpp/impl/codegen/grpc_library.h',
                       'include/grpcpp/impl/codegen/intercepted_channel.h',
                       'include/grpcpp/impl/codegen/interceptor.h',
                       'include/grpcpp/impl/codegen/interceptor_common.h',
@@ -194,6 +193,7 @@ Pod::Spec.new do |s|
                       'include/grpcpp/support/sync_stream.h',
                       'include/grpcpp/support/time.h',
                       'include/grpcpp/support/validate_service_config.h',
+                      'include/grpcpp/version_info.h',
                       'include/grpcpp/xds_server_builder.h'
   end
 
@@ -274,8 +274,7 @@ Pod::Spec.new do |s|
                       'src/core/ext/filters/fault_injection/fault_injection_service_config_parser.h',
                       'src/core/ext/filters/http/client/http_client_filter.h',
                       'src/core/ext/filters/http/client_authority_filter.h',
-                      'src/core/ext/filters/http/message_compress/message_compress_filter.h',
-                      'src/core/ext/filters/http/message_compress/message_decompress_filter.h',
+                      'src/core/ext/filters/http/message_compress/compression_filter.h',
                       'src/core/ext/filters/http/server/http_server_filter.h',
                       'src/core/ext/filters/message_size/message_size_filter.h',
                       'src/core/ext/filters/rbac/rbac_filter.h',
@@ -342,6 +341,7 @@ Pod::Spec.new do |s|
                       'src/core/ext/transport/chttp2/transport/hpack_parser.h',
                       'src/core/ext/transport/chttp2/transport/hpack_parser_table.h',
                       'src/core/ext/transport/chttp2/transport/http2_settings.h',
+                      'src/core/ext/transport/chttp2/transport/http_trace.h',
                       'src/core/ext/transport/chttp2/transport/huffsyms.h',
                       'src/core/ext/transport/chttp2/transport/internal.h',
                       'src/core/ext/transport/chttp2/transport/stream_map.h',
@@ -699,11 +699,14 @@ Pod::Spec.new do |s|
                       'src/core/lib/event_engine/posix_engine/event_poller_posix_default.h',
                       'src/core/lib/event_engine/posix_engine/internal_errqueue.h',
                       'src/core/lib/event_engine/posix_engine/lockfree_event.h',
+                      'src/core/lib/event_engine/posix_engine/posix_endpoint.h',
                       'src/core/lib/event_engine/posix_engine/posix_engine.h',
                       'src/core/lib/event_engine/posix_engine/posix_engine_closure.h',
+                      'src/core/lib/event_engine/posix_engine/tcp_socket_utils.h',
                       'src/core/lib/event_engine/posix_engine/timer.h',
                       'src/core/lib/event_engine/posix_engine/timer_heap.h',
                       'src/core/lib/event_engine/posix_engine/timer_manager.h',
+                      'src/core/lib/event_engine/posix_engine/traced_buffer_list.h',
                       'src/core/lib/event_engine/posix_engine/wakeup_fd_eventfd.h',
                       'src/core/lib/event_engine/posix_engine/wakeup_fd_pipe.h',
                       'src/core/lib/event_engine/posix_engine/wakeup_fd_posix.h',
@@ -739,6 +742,7 @@ Pod::Spec.new do |s|
                       'src/core/lib/gprpp/global_config_env.h',
                       'src/core/lib/gprpp/global_config_generic.h',
                       'src/core/lib/gprpp/host_port.h',
+                      'src/core/lib/gprpp/load_file.h',
                       'src/core/lib/gprpp/manual_constructor.h',
                       'src/core/lib/gprpp/match.h',
                       'src/core/lib/gprpp/memory.h',
@@ -1002,6 +1006,7 @@ Pod::Spec.new do |s|
                       'src/core/tsi/ssl/session_cache/ssl_session.h',
                       'src/core/tsi/ssl/session_cache/ssl_session_cache.h',
                       'src/core/tsi/ssl_transport_security.h',
+                      'src/core/tsi/ssl_transport_security_utils.h',
                       'src/core/tsi/ssl_types.h',
                       'src/core/tsi/transport_security.h',
                       'src/core/tsi/transport_security_grpc.h',
@@ -1172,8 +1177,7 @@ Pod::Spec.new do |s|
                               'src/core/ext/filters/fault_injection/fault_injection_service_config_parser.h',
                               'src/core/ext/filters/http/client/http_client_filter.h',
                               'src/core/ext/filters/http/client_authority_filter.h',
-                              'src/core/ext/filters/http/message_compress/message_compress_filter.h',
-                              'src/core/ext/filters/http/message_compress/message_decompress_filter.h',
+                              'src/core/ext/filters/http/message_compress/compression_filter.h',
                               'src/core/ext/filters/http/server/http_server_filter.h',
                               'src/core/ext/filters/message_size/message_size_filter.h',
                               'src/core/ext/filters/rbac/rbac_filter.h',
@@ -1222,6 +1226,7 @@ Pod::Spec.new do |s|
                               'src/core/ext/transport/chttp2/transport/hpack_parser.h',
                               'src/core/ext/transport/chttp2/transport/hpack_parser_table.h',
                               'src/core/ext/transport/chttp2/transport/http2_settings.h',
+                              'src/core/ext/transport/chttp2/transport/http_trace.h',
                               'src/core/ext/transport/chttp2/transport/huffsyms.h',
                               'src/core/ext/transport/chttp2/transport/internal.h',
                               'src/core/ext/transport/chttp2/transport/stream_map.h',
@@ -1579,11 +1584,14 @@ Pod::Spec.new do |s|
                               'src/core/lib/event_engine/posix_engine/event_poller_posix_default.h',
                               'src/core/lib/event_engine/posix_engine/internal_errqueue.h',
                               'src/core/lib/event_engine/posix_engine/lockfree_event.h',
+                              'src/core/lib/event_engine/posix_engine/posix_endpoint.h',
                               'src/core/lib/event_engine/posix_engine/posix_engine.h',
                               'src/core/lib/event_engine/posix_engine/posix_engine_closure.h',
+                              'src/core/lib/event_engine/posix_engine/tcp_socket_utils.h',
                               'src/core/lib/event_engine/posix_engine/timer.h',
                               'src/core/lib/event_engine/posix_engine/timer_heap.h',
                               'src/core/lib/event_engine/posix_engine/timer_manager.h',
+                              'src/core/lib/event_engine/posix_engine/traced_buffer_list.h',
                               'src/core/lib/event_engine/posix_engine/wakeup_fd_eventfd.h',
                               'src/core/lib/event_engine/posix_engine/wakeup_fd_pipe.h',
                               'src/core/lib/event_engine/posix_engine/wakeup_fd_posix.h',
@@ -1619,6 +1627,7 @@ Pod::Spec.new do |s|
                               'src/core/lib/gprpp/global_config_env.h',
                               'src/core/lib/gprpp/global_config_generic.h',
                               'src/core/lib/gprpp/host_port.h',
+                              'src/core/lib/gprpp/load_file.h',
                               'src/core/lib/gprpp/manual_constructor.h',
                               'src/core/lib/gprpp/match.h',
                               'src/core/lib/gprpp/memory.h',
@@ -1882,6 +1891,7 @@ Pod::Spec.new do |s|
                               'src/core/tsi/ssl/session_cache/ssl_session.h',
                               'src/core/tsi/ssl/session_cache/ssl_session_cache.h',
                               'src/core/tsi/ssl_transport_security.h',
+                              'src/core/tsi/ssl_transport_security_utils.h',
                               'src/core/tsi/ssl_types.h',
                               'src/core/tsi/transport_security.h',
                               'src/core/tsi/transport_security_grpc.h',

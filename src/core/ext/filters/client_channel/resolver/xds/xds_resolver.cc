@@ -309,13 +309,11 @@ class XdsResolver : public Resolver {
              clusters_ == other_xds->clusters_;
     }
 
-    CallConfig GetCallConfig(GetCallConfigArgs args) override;
+    absl::StatusOr<CallConfig> GetCallConfig(GetCallConfigArgs args) override;
 
     std::vector<const grpc_channel_filter*> GetFilters() override {
       return filters_;
     }
-
-    ChannelArgs ModifyChannelArgs(const ChannelArgs& args) override;
 
    private:
     struct Route {
@@ -627,11 +625,6 @@ XdsResolver::XdsConfigSelector::CreateMethodConfig(
   return nullptr;
 }
 
-ChannelArgs XdsResolver::XdsConfigSelector::ModifyChannelArgs(
-    const ChannelArgs& args) {
-  return args;
-}
-
 void XdsResolver::XdsConfigSelector::MaybeAddCluster(const std::string& name) {
   if (clusters_.find(name) == clusters_.end()) {
     auto it = resolver_->cluster_state_map_.find(name);
@@ -645,35 +638,34 @@ void XdsResolver::XdsConfigSelector::MaybeAddCluster(const std::string& name) {
 }
 
 absl::optional<uint64_t> HeaderHashHelper(
-    const XdsRouteConfigResource::Route::RouteAction::HashPolicy& policy,
+    const XdsRouteConfigResource::Route::RouteAction::HashPolicy::Header&
+        header_policy,
     grpc_metadata_batch* initial_metadata) {
-  GPR_ASSERT(policy.type ==
-             XdsRouteConfigResource::Route::RouteAction::HashPolicy::HEADER);
   std::string value_buffer;
   absl::optional<absl::string_view> header_value = XdsRouting::GetHeaderValue(
-      initial_metadata, policy.header_name, &value_buffer);
-  if (!header_value.has_value()) {
-    return absl::nullopt;
-  }
-  if (policy.regex != nullptr) {
+      initial_metadata, header_policy.header_name, &value_buffer);
+  if (!header_value.has_value()) return absl::nullopt;
+  if (header_policy.regex != nullptr) {
     // If GetHeaderValue() did not already store the value in
     // value_buffer, copy it there now, so we can modify it.
     if (header_value->data() != value_buffer.data()) {
       value_buffer = std::string(*header_value);
     }
-    RE2::GlobalReplace(&value_buffer, *policy.regex, policy.regex_substitution);
+    RE2::GlobalReplace(&value_buffer, *header_policy.regex,
+                       header_policy.regex_substitution);
     header_value = value_buffer;
   }
   return XXH64(header_value->data(), header_value->size(), 0);
 }
 
-ConfigSelector::CallConfig XdsResolver::XdsConfigSelector::GetCallConfig(
-    GetCallConfigArgs args) {
+absl::StatusOr<ConfigSelector::CallConfig>
+XdsResolver::XdsConfigSelector::GetCallConfig(GetCallConfigArgs args) {
   auto route_index = XdsRouting::GetRouteForRequest(
       RouteListIterator(&route_table_), StringViewFromSlice(*args.path),
       args.initial_metadata);
   if (!route_index.has_value()) {
-    return CallConfig();
+    return absl::UnavailableError(
+        "No matching route found in xDS route config");
   }
   auto& entry = route_table_[*route_index];
   // Found a route match
@@ -681,10 +673,7 @@ ConfigSelector::CallConfig XdsResolver::XdsConfigSelector::GetCallConfig(
       absl::get_if<XdsRouteConfigResource::Route::RouteAction>(
           &entry.route.action);
   if (route_action == nullptr) {
-    CallConfig call_config;
-    call_config.status =
-        absl::UnavailableError("Matching route has inappropriate action");
-    return call_config;
+    return absl::UnavailableError("Matching route has inappropriate action");
   }
   std::string cluster_name;
   RefCountedPtr<ServiceConfig> method_config;
@@ -741,17 +730,16 @@ ConfigSelector::CallConfig XdsResolver::XdsConfigSelector::GetCallConfig(
   // Generate a hash.
   absl::optional<uint64_t> hash;
   for (const auto& hash_policy : route_action->hash_policies) {
-    absl::optional<uint64_t> new_hash;
-    switch (hash_policy.type) {
-      case XdsRouteConfigResource::Route::RouteAction::HashPolicy::HEADER:
-        new_hash = HeaderHashHelper(hash_policy, args.initial_metadata);
-        break;
-      case XdsRouteConfigResource::Route::RouteAction::HashPolicy::CHANNEL_ID:
-        new_hash = resolver_->channel_id();
-        break;
-      default:
-        GPR_ASSERT(0);
-    }
+    absl::optional<uint64_t> new_hash = Match(
+        hash_policy.policy,
+        [&](const XdsRouteConfigResource::Route::RouteAction::HashPolicy::
+                Header& header) {
+          return HeaderHashHelper(header, args.initial_metadata);
+        },
+        [&](const XdsRouteConfigResource::Route::RouteAction::HashPolicy::
+                ChannelId&) -> absl::optional<uint64_t> {
+          return resolver_->channel_id();
+        });
     if (new_hash.has_value()) {
       // Rotating the old value prevents duplicate hash rules from cancelling
       // each other out and preserves all of the entropy

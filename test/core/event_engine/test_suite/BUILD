@@ -46,7 +46,10 @@ grpc_cc_library(
     testonly = True,
     srcs = ["client_test.cc"],
     hdrs = COMMON_HEADERS,
-    deps = [":conformance_test_base_lib"],
+    deps = [
+        ":conformance_test_base_lib",
+        "//src/core:channel_args",
+    ],
     alwayslink = 1,
 )
 
@@ -55,7 +58,10 @@ grpc_cc_library(
     testonly = True,
     srcs = ["server_test.cc"],
     hdrs = COMMON_HEADERS,
-    deps = [":conformance_test_base_lib"],
+    deps = [
+        ":conformance_test_base_lib",
+        "//src/core:channel_args",
+    ],
     alwayslink = 1,
 )
 
@@ -85,6 +91,7 @@ grpc_cc_test(
     deps = [
         ":client",
         ":oracle_event_engine_posix",
+        ":server",
         "//src/core:posix_event_engine",
         "//test/core/event_engine/test_suite:timer",
     ],
@@ -102,6 +109,20 @@ grpc_cc_test(
     deps = [
         "//src/core:windows_event_engine",
         "//test/core/event_engine/test_suite:timer",
+    ],
+)
+
+grpc_cc_test(
+    name = "cf_event_engine_test",
+    srcs = ["cf_event_engine_test.cc"],
+    tags = [
+        "no_linux",
+        "no_windows",
+    ],
+    uses_polling = False,
+    deps = [
+        ":timer",
+        "//src/core:cf_event_engine",
     ],
 )
 

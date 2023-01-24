@@ -28,6 +28,7 @@ grpc_cc_test(
     deps = [
         "//:gpr",
         "//:grpc",
+        "//src/core:channel_args",
         "//test/core/util:grpc_test_util",
     ],
 )
@@ -42,6 +43,7 @@ grpc_cc_test(
     deps = [
         "//:gpr",
         "//:grpc",
+        "//src/core:channel_args",
         "//test/core/util:grpc_test_util",
     ],
 )
@@ -54,8 +56,10 @@ grpc_cc_test(
     ],
     language = "C++",
     deps = [
+        "//:channel_stack_builder",
         "//:gpr",
         "//:grpc",
+        "//src/core:closure",
         "//test/core/util:grpc_test_util",
     ],
 )
@@ -72,6 +76,7 @@ grpc_cc_test(
     deps = [
         "//:gpr",
         "//:grpc",
+        "//src/core:channel_args",
         "//test/core/util:grpc_test_util",
     ],
 )
@@ -87,6 +92,7 @@ grpc_cc_test(
         "//:gpr",
         "//:grpc",
         "//:grpc++",
+        "//src/core:channel_args",
         "//test/core/util:grpc_test_util",
         "//test/cpp/util:channel_trace_proto_helper",
     ],
@@ -103,6 +109,7 @@ grpc_cc_test(
         "//:gpr",
         "//:grpc",
         "//:grpc++",
+        "//src/core:channel_args",
         "//test/core/util:grpc_test_util",
         "//test/cpp/util:channel_trace_proto_helper",
     ],

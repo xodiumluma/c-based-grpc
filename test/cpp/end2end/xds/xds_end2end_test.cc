@@ -72,6 +72,7 @@
 #include "src/core/lib/gpr/string.h"
 #include "src/core/lib/gpr/time_precise.h"
 #include "src/core/lib/gpr/tmpfile.h"
+#include "src/core/lib/gprpp/crash.h"
 #include "src/core/lib/gprpp/env.h"
 #include "src/core/lib/gprpp/ref_counted_ptr.h"
 #include "src/core/lib/gprpp/sync.h"
@@ -782,6 +783,23 @@ TEST_P(XdsEnabledServerTest, BadLdsUpdateNoApiListenerNorAddress) {
                   GetServerListenerName(backends_[0]->port()),
                   ": INVALID_ARGUMENT: Listener has neither address nor "
                   "ApiListener]")));
+}
+
+// Verify that a non-TCP listener results in "not serving" status.
+TEST_P(XdsEnabledServerTest, NonTcpListener) {
+  DoSetUp();
+  Listener listener = default_listener_;  // Client-side listener.
+  listener = PopulateServerListenerNameAndPort(listener, backends_[0]->port());
+  auto hcm = ClientHcmAccessor().Unpack(listener);
+  auto* rds = hcm.mutable_rds();
+  rds->set_route_config_name(kDefaultRouteConfigurationName);
+  rds->mutable_config_source()->mutable_self();
+  ClientHcmAccessor().Pack(hcm, &listener);
+  balancer_->ads_service()->SetLdsResource(listener);
+  backends_[0]->Start();
+  backends_[0]->notifier()->WaitOnServingStatusChange(
+      absl::StrCat(ipv6_only_ ? "[::1]:" : "127.0.0.1:", backends_[0]->port()),
+      grpc::StatusCode::FAILED_PRECONDITION);
 }
 
 // Verify that a mismatch of listening address results in "not serving"

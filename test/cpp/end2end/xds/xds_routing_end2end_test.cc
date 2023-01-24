@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "src/core/ext/filters/client_channel/backup_poller.h"
+#include "src/proto/grpc/testing/xds/v3/fault.grpc.pb.h"
 #include "src/proto/grpc/testing/xds/v3/router.grpc.pb.h"
 #include "test/cpp/end2end/xds/xds_end2end_test_lib.h"
 
@@ -47,6 +48,35 @@ TEST_P(LdsTest, NacksInvalidListener) {
   EXPECT_THAT(
       response_state->error_message,
       ::testing::HasSubstr("Listener has neither address nor ApiListener"));
+}
+
+// Tests that we go into TRANSIENT_FAILURE if the Listener is not an API
+// listener.
+TEST_P(LdsTest, NotAnApiListener) {
+  Listener listener = default_server_listener_;
+  listener.set_name(kServerName);
+  auto hcm = ServerHcmAccessor().Unpack(listener);
+  auto* rds = hcm.mutable_rds();
+  rds->set_route_config_name(kDefaultRouteConfigurationName);
+  rds->mutable_config_source()->mutable_self();
+  ServerHcmAccessor().Pack(hcm, &listener);
+  balancer_->ads_service()->SetLdsResource(listener);
+  // RPCs should fail.
+  CheckRpcSendFailure(
+      DEBUG_LOCATION, StatusCode::UNAVAILABLE,
+      absl::StrCat(kServerName, ": UNAVAILABLE: not an API listener"));
+  // We should have ACKed the LDS resource.
+  const auto deadline =
+      absl::Now() + (absl::Seconds(30) * grpc_test_slowdown_factor());
+  while (true) {
+    ASSERT_LT(absl::Now(), deadline) << "timed out waiting for LDS ACK";
+    auto response_state = balancer_->ads_service()->lds_response_state();
+    if (response_state.has_value()) {
+      EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
+      break;
+    }
+    absl::SleepFor(absl::Seconds(1) * grpc_test_slowdown_factor());
+  }
 }
 
 class LdsDeletionTest : public XdsEnd2endTest {
@@ -96,11 +126,13 @@ TEST_P(LdsDeletionTest, ListenerDeletionIgnored) {
   EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
   // Unset LDS resource and wait for client to ACK the update.
   balancer_->ads_service()->UnsetResource(kLdsTypeUrl, kServerName);
-  const auto deadline = absl::Now() + absl::Seconds(30);
+  const auto deadline =
+      absl::Now() + (absl::Seconds(30) * grpc_test_slowdown_factor());
   while (true) {
     ASSERT_LT(absl::Now(), deadline) << "timed out waiting for LDS ACK";
     response_state = balancer_->ads_service()->lds_response_state();
     if (response_state.has_value()) break;
+    absl::SleepFor(absl::Seconds(1) * grpc_test_slowdown_factor());
   }
   EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
   // Make sure we can still send RPCs.
@@ -125,6 +157,240 @@ TEST_P(LdsDeletionTest, ListenerDeletionIgnored) {
                                    new_route_config);
   // Wait for client to start using backend 1.
   WaitForAllBackends(DEBUG_LOCATION, 1, 2);
+}
+
+using LdsRdsInteractionTest = XdsEnd2endTest;
+
+INSTANTIATE_TEST_SUITE_P(
+    XdsTest, LdsRdsInteractionTest,
+    ::testing::Values(XdsTestType().set_enable_rds_testing()),
+    &XdsTestType::Name);
+
+TEST_P(LdsRdsInteractionTest, SwitchFromRdsToInlineRouteConfig) {
+  CreateAndStartBackends(2);
+  // Bring up client pointing to backend 0 and wait for it to connect.
+  EdsResourceArgs args({{"locality0", CreateEndpointsForBackends(0, 1)}});
+  balancer_->ads_service()->SetEdsResource(BuildEdsResource(args));
+  WaitForBackend(DEBUG_LOCATION, 0);
+  // RDS should have been ACKed.
+  auto response_state = balancer_->ads_service()->rds_response_state();
+  ASSERT_TRUE(response_state.has_value());
+  EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
+  // Now recreate the LDS resource with an inline route config pointing to a
+  // different CDS and EDS resource, pointing to backend 1, and make sure
+  // the client uses it.
+  const char* kNewClusterName = "new_cluster_name";
+  const char* kNewEdsResourceName = "new_eds_resource_name";
+  auto cluster = default_cluster_;
+  cluster.set_name(kNewClusterName);
+  cluster.mutable_eds_cluster_config()->set_service_name(kNewEdsResourceName);
+  balancer_->ads_service()->SetCdsResource(cluster);
+  args = EdsResourceArgs({{"locality0", CreateEndpointsForBackends(1, 2)}});
+  balancer_->ads_service()->SetEdsResource(
+      BuildEdsResource(args, kNewEdsResourceName));
+  RouteConfiguration new_route_config = default_route_config_;
+  new_route_config.mutable_virtual_hosts(0)
+      ->mutable_routes(0)
+      ->mutable_route()
+      ->set_cluster(kNewClusterName);
+  Listener listener = default_listener_;
+  HttpConnectionManager http_connection_manager =
+      ClientHcmAccessor().Unpack(listener);
+  *http_connection_manager.mutable_route_config() = new_route_config;
+  ClientHcmAccessor().Pack(http_connection_manager, &listener);
+  balancer_->ads_service()->SetLdsResource(listener);
+  // Wait for client to start using backend 1.
+  WaitForBackend(DEBUG_LOCATION, 1);
+  // Send an update to the original RDS resource, which the client
+  // should no longer be subscribed to.  We need this RouteConfig to be
+  // different than the original one so that the update does not get
+  // squelched by XdsClient, so we add a second domain to the vhost that
+  // will not actually be used.
+  new_route_config = default_route_config_;
+  new_route_config.mutable_virtual_hosts(0)->add_domains("foo.example.com");
+  balancer_->ads_service()->SetRdsResource(new_route_config);
+  // Wait for RDS ACK to know that the client saw the change.
+  // TODO(roth): The client does not actually ACK here, it just sends an
+  // unsubscription request, but our fake xDS server is incorrectly treating
+  // that as an ACK.  When we have time, fix the behavior of the fake
+  // xDS server, and then change this test to ensure that there is no RDS
+  // ACK within the 30-second timeout period.
+  const auto deadline =
+      absl::Now() + (absl::Seconds(30) * grpc_test_slowdown_factor());
+  while (true) {
+    ASSERT_LT(absl::Now(), deadline) << "timed out waiting for RDS ACK";
+    response_state = balancer_->ads_service()->rds_response_state();
+    if (response_state.has_value()) break;
+    absl::SleepFor(absl::Seconds(1) * grpc_test_slowdown_factor());
+  }
+  EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
+  // Make sure RPCs are still going to backend 1.  This shows that the
+  // client did not replace its route config with the one from the RDS
+  // resource that it should no longer be using.
+  ResetBackendCounters();
+  CheckRpcSendOk(DEBUG_LOCATION);
+  EXPECT_EQ(0, backends_[0]->backend_service()->request_count());
+  EXPECT_EQ(1, backends_[1]->backend_service()->request_count());
+}
+
+TEST_P(LdsRdsInteractionTest, SwitchFromInlineRouteConfigToRds) {
+  CreateAndStartBackends(2);
+  // Create an LDS resource with an inline RouteConfig pointing to a
+  // different CDS and EDS resource, sending traffic to backend 0.
+  const char* kNewClusterName = "new_cluster_name";
+  const char* kNewEdsResourceName = "new_eds_resource_name";
+  auto cluster = default_cluster_;
+  cluster.set_name(kNewClusterName);
+  cluster.mutable_eds_cluster_config()->set_service_name(kNewEdsResourceName);
+  balancer_->ads_service()->SetCdsResource(cluster);
+  EdsResourceArgs args({{"locality0", CreateEndpointsForBackends(0, 1)}});
+  balancer_->ads_service()->SetEdsResource(
+      BuildEdsResource(args, kNewEdsResourceName));
+  RouteConfiguration route_config = default_route_config_;
+  route_config.mutable_virtual_hosts(0)
+      ->mutable_routes(0)
+      ->mutable_route()
+      ->set_cluster(kNewClusterName);
+  Listener listener = default_listener_;
+  HttpConnectionManager http_connection_manager =
+      ClientHcmAccessor().Unpack(listener);
+  *http_connection_manager.mutable_route_config() = route_config;
+  ClientHcmAccessor().Pack(http_connection_manager, &listener);
+  balancer_->ads_service()->SetLdsResource(listener);
+  // Start the client and make sure traffic goes to backend 0.
+  WaitForBackend(DEBUG_LOCATION, 0);
+  // RDS should not have been ACKed, because the RouteConfig was inlined.
+  ASSERT_FALSE(balancer_->ads_service()->rds_response_state().has_value());
+  // Change the LDS resource to point to an RDS resource.  The LDS resource
+  // configures the fault injection filter with a config that fails all RPCs.
+  // However, the RDS resource has a typed_per_filter_config override that
+  // disables the fault injection filter.  The RDS resource points to a
+  // new cluster that sends traffic to backend 1.
+  args = EdsResourceArgs({{"locality0", CreateEndpointsForBackends(1, 2)}});
+  balancer_->ads_service()->SetEdsResource(BuildEdsResource(args));
+  route_config = default_route_config_;
+  auto* config_map = route_config.mutable_virtual_hosts(0)
+                         ->mutable_routes(0)
+                         ->mutable_typed_per_filter_config();
+  (*config_map)["envoy.fault"].PackFrom(
+      envoy::extensions::filters::http::fault::v3::HTTPFault());
+  envoy::extensions::filters::http::fault::v3::HTTPFault http_fault;
+  auto* abort_percentage = http_fault.mutable_abort()->mutable_percentage();
+  abort_percentage->set_numerator(100);
+  abort_percentage->set_denominator(abort_percentage->HUNDRED);
+  http_fault.mutable_abort()->set_grpc_status(
+      static_cast<uint32_t>(StatusCode::ABORTED));
+  listener = default_listener_;
+  http_connection_manager = ClientHcmAccessor().Unpack(listener);
+  *http_connection_manager.add_http_filters() =
+      http_connection_manager.http_filters(0);
+  auto* filter = http_connection_manager.mutable_http_filters(0);
+  filter->set_name("envoy.fault");
+  filter->mutable_typed_config()->PackFrom(http_fault);
+  ClientHcmAccessor().Pack(http_connection_manager, &listener);
+  SetListenerAndRouteConfiguration(balancer_.get(), std::move(listener),
+                                   route_config);
+  // Wait for traffic to switch to backend 1.  There should be no RPC
+  // failures here; if there are, that indicates that the client started
+  // using the new LDS resource before it saw the new RDS resource.
+  WaitForBackend(DEBUG_LOCATION, 1);
+}
+
+TEST_P(LdsRdsInteractionTest, HcmConfigUpdatedWithoutRdsChange) {
+  CreateAndStartBackends(1);
+  // Bring up client pointing to backend 0 and wait for it to connect.
+  EdsResourceArgs args({{"locality0", CreateEndpointsForBackends(0, 1)}});
+  balancer_->ads_service()->SetEdsResource(BuildEdsResource(args));
+  WaitForBackend(DEBUG_LOCATION, 0);
+  // LDS should have been ACKed.
+  auto response_state = balancer_->ads_service()->lds_response_state();
+  ASSERT_TRUE(response_state.has_value());
+  EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
+  // Now update the LDS resource to add the fault injection filter with
+  // a config that fails all RPCs.
+  envoy::extensions::filters::http::fault::v3::HTTPFault http_fault;
+  auto* abort_percentage = http_fault.mutable_abort()->mutable_percentage();
+  abort_percentage->set_numerator(100);
+  abort_percentage->set_denominator(abort_percentage->HUNDRED);
+  http_fault.mutable_abort()->set_grpc_status(
+      static_cast<uint32_t>(StatusCode::ABORTED));
+  Listener listener = default_listener_;
+  HttpConnectionManager http_connection_manager =
+      ClientHcmAccessor().Unpack(listener);
+  *http_connection_manager.add_http_filters() =
+      http_connection_manager.http_filters(0);
+  auto* filter = http_connection_manager.mutable_http_filters(0);
+  filter->set_name("envoy.fault");
+  filter->mutable_typed_config()->PackFrom(http_fault);
+  ClientHcmAccessor().Pack(http_connection_manager, &listener);
+  SetListenerAndRouteConfiguration(balancer_.get(), std::move(listener),
+                                   default_route_config_);
+  // Wait for the LDS update to be ACKed.
+  const auto deadline =
+      absl::Now() + (absl::Seconds(30) * grpc_test_slowdown_factor());
+  while (true) {
+    ASSERT_LT(absl::Now(), deadline) << "timed out waiting for LDS ACK";
+    response_state = balancer_->ads_service()->lds_response_state();
+    if (response_state.has_value()) break;
+    absl::SleepFor(absl::Seconds(1) * grpc_test_slowdown_factor());
+  }
+  EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
+  // Now RPCs should fail with ABORTED status.
+  CheckRpcSendFailure(DEBUG_LOCATION, StatusCode::ABORTED, "Fault injected");
+}
+
+TEST_P(LdsRdsInteractionTest, LdsUpdateChangesHcmConfigAndRdsResourceName) {
+  CreateAndStartBackends(2);
+  // Bring up client pointing to backend 0 and wait for it to connect.
+  EdsResourceArgs args({{"locality0", CreateEndpointsForBackends(0, 1)}});
+  balancer_->ads_service()->SetEdsResource(BuildEdsResource(args));
+  WaitForBackend(DEBUG_LOCATION, 0);
+  // Change the LDS resource to point to an RDS resource.  The LDS resource
+  // configures the fault injection filter with a config that fails all RPCs.
+  // However, the RDS resource has a typed_per_filter_config override that
+  // disables the fault injection filter.  The RDS resource points to a
+  // new cluster that sends traffic to backend 1.
+  const char* kNewClusterName = "new_cluster_name";
+  const char* kNewEdsResourceName = "new_eds_resource_name";
+  auto cluster = default_cluster_;
+  cluster.set_name(kNewClusterName);
+  cluster.mutable_eds_cluster_config()->set_service_name(kNewEdsResourceName);
+  balancer_->ads_service()->SetCdsResource(cluster);
+  args = EdsResourceArgs({{"locality0", CreateEndpointsForBackends(1, 2)}});
+  balancer_->ads_service()->SetEdsResource(
+      BuildEdsResource(args, kNewEdsResourceName));
+  RouteConfiguration route_config = default_route_config_;
+  route_config.set_name("new_route_config");
+  route_config.mutable_virtual_hosts(0)
+      ->mutable_routes(0)
+      ->mutable_route()
+      ->set_cluster(kNewClusterName);
+  auto* config_map = route_config.mutable_virtual_hosts(0)
+                         ->mutable_routes(0)
+                         ->mutable_typed_per_filter_config();
+  (*config_map)["envoy.fault"].PackFrom(
+      envoy::extensions::filters::http::fault::v3::HTTPFault());
+  envoy::extensions::filters::http::fault::v3::HTTPFault http_fault;
+  auto* abort_percentage = http_fault.mutable_abort()->mutable_percentage();
+  abort_percentage->set_numerator(100);
+  abort_percentage->set_denominator(abort_percentage->HUNDRED);
+  http_fault.mutable_abort()->set_grpc_status(
+      static_cast<uint32_t>(StatusCode::ABORTED));
+  Listener listener = default_listener_;
+  HttpConnectionManager http_connection_manager =
+      ClientHcmAccessor().Unpack(listener);
+  *http_connection_manager.add_http_filters() =
+      http_connection_manager.http_filters(0);
+  auto* filter = http_connection_manager.mutable_http_filters(0);
+  filter->set_name("envoy.fault");
+  filter->mutable_typed_config()->PackFrom(http_fault);
+  ClientHcmAccessor().Pack(http_connection_manager, &listener);
+  SetListenerAndRouteConfiguration(balancer_.get(), std::move(listener),
+                                   route_config);
+  // Wait for traffic to switch to backend 1.  There should be no RPC
+  // failures here; if there are, that indicates that the client started
+  // using the new LDS resource before it saw the new RDS resource.
+  WaitForBackend(DEBUG_LOCATION, 1);
 }
 
 using LdsRdsTest = XdsEnd2endTest;
@@ -216,13 +482,25 @@ TEST_P(LdsRdsTest, NoMatchingRoute) {
   EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
 }
 
+TEST_P(LdsRdsTest, EmptyRouteList) {
+  RouteConfiguration route_config = default_route_config_;
+  route_config.mutable_virtual_hosts(0)->clear_routes();
+  SetRouteConfiguration(balancer_.get(), route_config);
+  CheckRpcSendFailure(DEBUG_LOCATION, StatusCode::UNAVAILABLE,
+                      "No matching route found in xDS route config");
+  // Do a bit of polling, to allow the ACK to get to the ADS server.
+  channel_->WaitForConnected(grpc_timeout_milliseconds_to_deadline(100));
+  auto response_state = RouteConfigurationResponseState(balancer_.get());
+  ASSERT_TRUE(response_state.has_value());
+  EXPECT_EQ(response_state->state, AdsServiceImpl::ResponseState::ACKED);
+}
+
 // Testing just one example of an invalid resource here.
 // Unit tests for XdsRouteConfigResourceType have exhaustive tests for all
 // of the invalid cases.
 TEST_P(LdsRdsTest, NacksInvalidRouteConfig) {
   RouteConfiguration route_config = default_route_config_;
-  auto* route1 = route_config.mutable_virtual_hosts(0)->mutable_routes(0);
-  route1->mutable_match()->set_prefix("grpc.testing.EchoTest1Service/");
+  route_config.mutable_virtual_hosts(0)->mutable_routes(0)->clear_match();
   SetRouteConfiguration(balancer_.get(), route_config);
   const auto response_state = WaitForRdsNack(DEBUG_LOCATION);
   ASSERT_TRUE(response_state.has_value()) << "timed out waiting for NACK";
@@ -239,8 +517,8 @@ TEST_P(LdsRdsTest, NacksInvalidRouteConfig) {
                 "field:api_listener.api_listener.value["
                 "envoy.extensions.filters.network.http_connection_manager.v3"
                 ".HttpConnectionManager].route_config.",
-          "virtual_hosts[0].routes "
-          "error:no valid routes in VirtualHost]]"));
+          "virtual_hosts[0].routes[0].match "
+          "error:field not present]]"));
 }
 
 // Tests that LDS client should fail RPCs with UNAVAILABLE status code if the
@@ -674,10 +952,6 @@ TEST_P(LdsRdsTest, XdsRoutingWeightedCluster) {
       route1->mutable_route()->mutable_weighted_clusters()->add_clusters();
   weighted_cluster3->set_name(kNotUsedClusterName);
   weighted_cluster3->mutable_weight()->set_value(0);
-  route1->mutable_route()
-      ->mutable_weighted_clusters()
-      ->mutable_total_weight()
-      ->set_value(kWeight75 + kWeight25);
   auto* default_route = new_route_config.mutable_virtual_hosts(0)->add_routes();
   default_route->mutable_match()->set_prefix("");
   default_route->mutable_route()->set_cluster(kDefaultClusterName);
@@ -704,6 +978,88 @@ TEST_P(LdsRdsTest, XdsRoutingWeightedCluster) {
               ::testing::DoubleNear(kWeight75Percent, kErrorTolerance));
   EXPECT_THAT(static_cast<double>(weight_25_request_count) / kNumEcho1Rpcs,
               ::testing::DoubleNear(kWeight25Percent, kErrorTolerance));
+}
+
+TEST_P(LdsRdsTest, XdsRoutingWeightedClusterNoIntegerOverflow) {
+  CreateAndStartBackends(3);
+  const char* kNewCluster1Name = "new_cluster_1";
+  const char* kNewEdsService1Name = "new_eds_service_name_1";
+  const char* kNewCluster2Name = "new_cluster_2";
+  const char* kNewEdsService2Name = "new_eds_service_name_2";
+  const size_t kNumEchoRpcs = 10;  // RPCs that will go to a fixed backend.
+  const uint32_t kWeight1 = std::numeric_limits<uint32_t>::max() / 3;
+  const uint32_t kWeight2 = std::numeric_limits<uint32_t>::max() - kWeight1;
+  const double kErrorTolerance = 0.05;
+  const double kWeight1Percent =
+      static_cast<double>(kWeight1) / std::numeric_limits<uint32_t>::max();
+  const double kWeight2Percent =
+      static_cast<double>(kWeight2) / std::numeric_limits<uint32_t>::max();
+  const size_t kNumEcho1Rpcs =
+      ComputeIdealNumRpcs(kWeight2Percent, kErrorTolerance);
+  // Populate new EDS resources.
+  EdsResourceArgs args({
+      {"locality0", CreateEndpointsForBackends(0, 1)},
+  });
+  EdsResourceArgs args1({
+      {"locality0", CreateEndpointsForBackends(1, 2)},
+  });
+  EdsResourceArgs args2({
+      {"locality0", CreateEndpointsForBackends(2, 3)},
+  });
+  balancer_->ads_service()->SetEdsResource(BuildEdsResource(args));
+  balancer_->ads_service()->SetEdsResource(
+      BuildEdsResource(args1, kNewEdsService1Name));
+  balancer_->ads_service()->SetEdsResource(
+      BuildEdsResource(args2, kNewEdsService2Name));
+  // Populate new CDS resources.
+  Cluster new_cluster1 = default_cluster_;
+  new_cluster1.set_name(kNewCluster1Name);
+  new_cluster1.mutable_eds_cluster_config()->set_service_name(
+      kNewEdsService1Name);
+  balancer_->ads_service()->SetCdsResource(new_cluster1);
+  Cluster new_cluster2 = default_cluster_;
+  new_cluster2.set_name(kNewCluster2Name);
+  new_cluster2.mutable_eds_cluster_config()->set_service_name(
+      kNewEdsService2Name);
+  balancer_->ads_service()->SetCdsResource(new_cluster2);
+  // Populating Route Configurations for LDS.
+  RouteConfiguration new_route_config = default_route_config_;
+  auto* route1 = new_route_config.mutable_virtual_hosts(0)->mutable_routes(0);
+  route1->mutable_match()->set_prefix("/grpc.testing.EchoTest1Service/");
+  auto* weighted_cluster1 =
+      route1->mutable_route()->mutable_weighted_clusters()->add_clusters();
+  weighted_cluster1->set_name(kNewCluster1Name);
+  weighted_cluster1->mutable_weight()->set_value(kWeight1);
+  auto* weighted_cluster2 =
+      route1->mutable_route()->mutable_weighted_clusters()->add_clusters();
+  weighted_cluster2->set_name(kNewCluster2Name);
+  weighted_cluster2->mutable_weight()->set_value(kWeight2);
+  auto* default_route = new_route_config.mutable_virtual_hosts(0)->add_routes();
+  default_route->mutable_match()->set_prefix("");
+  default_route->mutable_route()->set_cluster(kDefaultClusterName);
+  SetRouteConfiguration(balancer_.get(), new_route_config);
+  WaitForAllBackends(DEBUG_LOCATION, 0, 1);
+  WaitForAllBackends(DEBUG_LOCATION, 1, 3, /*check_status=*/nullptr,
+                     WaitForBackendOptions(),
+                     RpcOptions().set_rpc_service(SERVICE_ECHO1));
+  CheckRpcSendOk(DEBUG_LOCATION, kNumEchoRpcs);
+  CheckRpcSendOk(DEBUG_LOCATION, kNumEcho1Rpcs,
+                 RpcOptions().set_rpc_service(SERVICE_ECHO1));
+  // Make sure RPCs all go to the correct backend.
+  EXPECT_EQ(kNumEchoRpcs, backends_[0]->backend_service()->request_count());
+  EXPECT_EQ(0, backends_[0]->backend_service1()->request_count());
+  EXPECT_EQ(0, backends_[1]->backend_service()->request_count());
+  const int weight1_request_count =
+      backends_[1]->backend_service1()->request_count();
+  EXPECT_EQ(0, backends_[2]->backend_service()->request_count());
+  const int weight2_request_count =
+      backends_[2]->backend_service1()->request_count();
+  gpr_log(GPR_INFO, "target1 received %d rpcs and target2 received %d rpcs",
+          weight1_request_count, weight2_request_count);
+  EXPECT_THAT(static_cast<double>(weight1_request_count) / kNumEcho1Rpcs,
+              ::testing::DoubleNear(kWeight1Percent, kErrorTolerance));
+  EXPECT_THAT(static_cast<double>(weight2_request_count) / kNumEcho1Rpcs,
+              ::testing::DoubleNear(kWeight2Percent, kErrorTolerance));
 }
 
 TEST_P(LdsRdsTest, RouteActionWeightedTargetDefaultRoute) {
@@ -757,10 +1113,6 @@ TEST_P(LdsRdsTest, RouteActionWeightedTargetDefaultRoute) {
       route1->mutable_route()->mutable_weighted_clusters()->add_clusters();
   weighted_cluster2->set_name(kNewCluster2Name);
   weighted_cluster2->mutable_weight()->set_value(kWeight25);
-  route1->mutable_route()
-      ->mutable_weighted_clusters()
-      ->mutable_total_weight()
-      ->set_value(kWeight75 + kWeight25);
   SetRouteConfiguration(balancer_.get(), new_route_config);
   WaitForAllBackends(DEBUG_LOCATION, 1, 3);
   CheckRpcSendOk(DEBUG_LOCATION, kNumEchoRpcs);
@@ -846,10 +1198,6 @@ TEST_P(LdsRdsTest, XdsRoutingWeightedClusterUpdateWeights) {
       route1->mutable_route()->mutable_weighted_clusters()->add_clusters();
   weighted_cluster2->set_name(kNewCluster2Name);
   weighted_cluster2->mutable_weight()->set_value(kWeight25);
-  route1->mutable_route()
-      ->mutable_weighted_clusters()
-      ->mutable_total_weight()
-      ->set_value(kWeight75 + kWeight25);
   auto* default_route = new_route_config.mutable_virtual_hosts(0)->add_routes();
   default_route->mutable_match()->set_prefix("");
   default_route->mutable_route()->set_cluster(kDefaultClusterName);
@@ -986,10 +1334,6 @@ TEST_P(LdsRdsTest, XdsRoutingWeightedClusterUpdateClusters) {
       route1->mutable_route()->mutable_weighted_clusters()->add_clusters();
   weighted_cluster2->set_name(kDefaultClusterName);
   weighted_cluster2->mutable_weight()->set_value(kWeight25);
-  route1->mutable_route()
-      ->mutable_weighted_clusters()
-      ->mutable_total_weight()
-      ->set_value(kWeight75 + kWeight25);
   auto* default_route = new_route_config.mutable_virtual_hosts(0)->add_routes();
   default_route->mutable_match()->set_prefix("");
   default_route->mutable_route()->set_cluster(kDefaultClusterName);

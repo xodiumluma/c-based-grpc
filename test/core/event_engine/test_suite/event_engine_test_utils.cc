@@ -35,17 +35,12 @@
 #include <grpc/slice_buffer.h>
 #include <grpc/support/log.h>
 
-#include "src/core/lib/address_utils/parse_address.h"
 #include "src/core/lib/event_engine/channel_args_endpoint_config.h"
+#include "src/core/lib/event_engine/tcp_socket_utils.h"
 #include "src/core/lib/gprpp/notification.h"
-#include "src/core/lib/iomgr/resolved_address.h"
 #include "src/core/lib/resource_quota/memory_quota.h"
-#include "src/core/lib/uri/uri_parser.h"
 
 // IWYU pragma: no_include <sys/socket.h>
-
-using Endpoint = ::grpc_event_engine::experimental::EventEngine::Endpoint;
-using Listener = ::grpc_event_engine::experimental::EventEngine::Listener;
 
 namespace grpc_event_engine {
 namespace experimental {
@@ -87,19 +82,6 @@ void WaitForSingleOwner(std::shared_ptr<EventEngine>&& engine) {
   }
 }
 
-EventEngine::ResolvedAddress URIToResolvedAddress(std::string address_str) {
-  grpc_resolved_address addr;
-  absl::StatusOr<grpc_core::URI> uri = grpc_core::URI::Parse(address_str);
-  if (!uri.ok()) {
-    gpr_log(GPR_ERROR, "Failed to parse. Error: %s",
-            uri.status().ToString().c_str());
-    GPR_ASSERT(uri.ok());
-  }
-  GPR_ASSERT(grpc_parse_uri(*uri, &addr));
-  return EventEngine::ResolvedAddress(
-      reinterpret_cast<const sockaddr*>(addr.addr), addr.len);
-}
-
 void AppendStringToSliceBuffer(SliceBuffer* buf, std::string data) {
   buf->Append(Slice::FromCopiedString(data));
 }
@@ -115,8 +97,9 @@ std::string ExtractSliceBufferIntoString(SliceBuffer* buf) {
   return tmp;
 }
 
-absl::Status SendValidatePayload(std::string data, Endpoint* send_endpoint,
-                                 Endpoint* receive_endpoint) {
+absl::Status SendValidatePayload(std::string data,
+                                 EventEngine::Endpoint* send_endpoint,
+                                 EventEngine::Endpoint* receive_endpoint) {
   GPR_ASSERT(receive_endpoint != nullptr && send_endpoint != nullptr);
   int num_bytes_written = data.size();
   grpc_core::Notification read_signal;
@@ -183,8 +166,8 @@ absl::Status ConnectionManager::BindAndStartListener(
           absl::StrCat("Listener already existis for address: ", addr));
     }
   }
-  Listener::AcceptCallback accept_cb =
-      [this](std::unique_ptr<Endpoint> ep,
+  EventEngine::Listener::AcceptCallback accept_cb =
+      [this](std::unique_ptr<EventEngine::Endpoint> ep,
              MemoryAllocator /*memory_allocator*/) {
         last_in_progress_connection_.SetServerEndpoint(std::move(ep));
       };
@@ -201,9 +184,9 @@ absl::Status ConnectionManager::BindAndStartListener(
     return status.status();
   }
 
-  std::shared_ptr<Listener> listener((*status).release());
+  std::shared_ptr<EventEngine::Listener> listener((*status).release());
   for (auto& addr : addrs) {
-    auto bind_status = listener->Bind(URIToResolvedAddress(addr));
+    auto bind_status = listener->Bind(*URIToResolvedAddress(addr));
     if (!bind_status.ok()) {
       gpr_log(GPR_ERROR, "Binding listener failed: %s",
               bind_status.status().ToString().c_str());
@@ -219,7 +202,8 @@ absl::Status ConnectionManager::BindAndStartListener(
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::tuple<std::unique_ptr<Endpoint>, std::unique_ptr<Endpoint>>>
+absl::StatusOr<std::tuple<std::unique_ptr<EventEngine::Endpoint>,
+                          std::unique_ptr<EventEngine::Endpoint>>>
 ConnectionManager::CreateConnection(std::string target_addr,
                                     EventEngine::Duration timeout,
                                     bool client_type_oracle) {
@@ -231,7 +215,7 @@ ConnectionManager::CreateConnection(std::string target_addr,
                                                  : test_event_engine_.get();
   ChannelArgsEndpointConfig config;
   event_engine->Connect(
-      [this](absl::StatusOr<std::unique_ptr<Endpoint>> status) {
+      [this](absl::StatusOr<std::unique_ptr<EventEngine::Endpoint>> status) {
         if (!status.ok()) {
           gpr_log(GPR_ERROR, "Connect failed: %s",
                   status.status().ToString().c_str());
@@ -240,7 +224,7 @@ ConnectionManager::CreateConnection(std::string target_addr,
           last_in_progress_connection_.SetClientEndpoint(std::move(*status));
         }
       },
-      URIToResolvedAddress(target_addr), config,
+      *URIToResolvedAddress(target_addr), config,
       memory_quota_->CreateMemoryAllocator(conn_name), timeout);
 
   auto client_endpoint = last_in_progress_connection_.GetClientEndpoint();

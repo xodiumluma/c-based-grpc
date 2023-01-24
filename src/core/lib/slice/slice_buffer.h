@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef GRPC_CORE_LIB_SLICE_SLICE_BUFFER_H
-#define GRPC_CORE_LIB_SLICE_SLICE_BUFFER_H
+#ifndef GRPC_SRC_CORE_LIB_SLICE_SLICE_BUFFER_H
+#define GRPC_SRC_CORE_LIB_SLICE_SLICE_BUFFER_H
 
 #include <grpc/support/port_platform.h>
 
@@ -108,6 +108,11 @@ class SliceBuffer {
   /// associated slice.
   Slice RefSlice(size_t index) const;
 
+  const Slice& operator[](size_t index) const {
+    return grpc_event_engine::experimental::internal::SliceCast<Slice>(
+        slice_buffer_.slices[index]);
+  }
+
   /// The total number of bytes held by the SliceBuffer
   size_t Length() const { return slice_buffer_.length; }
 
@@ -154,4 +159,4 @@ class SliceBuffer {
 void grpc_slice_buffer_copy_first_into_buffer(grpc_slice_buffer* src, size_t n,
                                               void* dst);
 
-#endif  // GRPC_CORE_LIB_SLICE_SLICE_BUFFER_H
+#endif  // GRPC_SRC_CORE_LIB_SLICE_SLICE_BUFFER_H

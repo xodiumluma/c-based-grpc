@@ -38,11 +38,11 @@
 #include "absl/types/variant.h"
 
 #include <grpc/event_engine/event_engine.h>
-#include <grpc/impl/codegen/gpr_types.h>
 #include <grpc/slice.h>
 #include <grpc/status.h>
 #include <grpc/support/log.h>
 #include <grpc/support/string_util.h>
+#include <grpc/support/time.h>
 
 #include "src/core/ext/filters/client_channel/backend_metric.h"
 #include "src/core/ext/filters/client_channel/backup_poller.h"
@@ -557,7 +557,8 @@ class ClientChannel::SubchannelWrapper : public SubchannelInterface {
           DEBUG_LOCATION);
     }
 
-    void OnConnectivityStateChange() override {
+    void OnConnectivityStateChange(grpc_connectivity_state state,
+                                   const absl::Status& status) override {
       if (GRPC_TRACE_FLAG_ENABLED(grpc_client_channel_trace)) {
         gpr_log(GPR_INFO,
                 "chand=%p: connectivity change for subchannel wrapper %p "
@@ -566,9 +567,9 @@ class ClientChannel::SubchannelWrapper : public SubchannelInterface {
       }
       Ref().release();  // ref owned by lambda
       parent_->chand_->work_serializer_->Run(
-          [this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(
+          [this, state, status]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(
               *parent_->chand_->work_serializer_) {
-            ApplyUpdateInControlPlaneWorkSerializer();
+            ApplyUpdateInControlPlaneWorkSerializer(state, status);
             Unref();
           },
           DEBUG_LOCATION);
@@ -588,19 +589,20 @@ class ClientChannel::SubchannelWrapper : public SubchannelInterface {
     }
 
    private:
-    void ApplyUpdateInControlPlaneWorkSerializer()
+    void ApplyUpdateInControlPlaneWorkSerializer(grpc_connectivity_state state,
+                                                 const absl::Status& status)
         ABSL_EXCLUSIVE_LOCKS_REQUIRED(*parent_->chand_->work_serializer_) {
       if (GRPC_TRACE_FLAG_ENABLED(grpc_client_channel_trace)) {
         gpr_log(GPR_INFO,
                 "chand=%p: processing connectivity change in work serializer "
-                "for subchannel wrapper %p subchannel %p "
-                "watcher=%p",
+                "for subchannel wrapper %p subchannel %p watcher=%p "
+                "state=%s status=%s",
                 parent_->chand_, parent_.get(), parent_->subchannel_.get(),
-                watcher_.get());
+                watcher_.get(), ConnectivityStateName(state),
+                status.ToString().c_str());
       }
-      ConnectivityStateChange state_change = PopConnectivityStateChange();
       absl::optional<absl::Cord> keepalive_throttling =
-          state_change.status.GetPayload(kKeepaliveThrottlingKey);
+          status.GetPayload(kKeepaliveThrottlingKey);
       if (keepalive_throttling.has_value()) {
         int new_keepalive_time = -1;
         if (absl::SimpleAtoi(std::string(keepalive_throttling.value()),
@@ -632,11 +634,9 @@ class ClientChannel::SubchannelWrapper : public SubchannelInterface {
         // We specifically want to avoid propagating the status for
         // state IDLE that the real subchannel gave us only for the
         // purpose of keepalive propagation.
-        if (state_change.state != GRPC_CHANNEL_TRANSIENT_FAILURE) {
-          state_change.status = absl::OkStatus();
-        }
-        watcher_->OnConnectivityStateChange(state_change.state,
-                                            state_change.status);
+        watcher_->OnConnectivityStateChange(
+            state, state == GRPC_CHANNEL_TRANSIENT_FAILURE ? status
+                                                           : absl::OkStatus());
       }
     }
 
@@ -2144,6 +2144,12 @@ void ClientChannel::CallData::MaybeRemoveCallFromResolverQueuedCallsLocked(
   queued_pending_resolver_result_ = false;
   // Lame the call combiner canceller.
   resolver_call_canceller_ = nullptr;
+  // Add trace annotation
+  auto* call_tracer =
+      static_cast<CallTracer*>(call_context_[GRPC_CONTEXT_CALL_TRACER].value);
+  if (call_tracer != nullptr) {
+    call_tracer->RecordAnnotation("Delayed name resolution complete.");
+  }
 }
 
 void ClientChannel::CallData::MaybeAddCallToResolverQueuedCallsLocked(
@@ -2942,8 +2948,12 @@ void ClientChannel::LoadBalancedCall::RecordCallCompletion(
   if (lb_subchannel_call_tracker_ != nullptr) {
     Metadata trailing_metadata(recv_trailing_metadata_);
     BackendMetricAccessor backend_metric_accessor(this);
+    const char* peer_string =
+        peer_string_ != nullptr
+            ? reinterpret_cast<char*>(gpr_atm_acq_load(peer_string_))
+            : "";
     LoadBalancingPolicy::SubchannelCallTrackerInterface::FinishArgs args = {
-        status, &trailing_metadata, &backend_metric_accessor};
+        peer_string, status, &trailing_metadata, &backend_metric_accessor};
     lb_subchannel_call_tracker_->Finish(args);
     lb_subchannel_call_tracker_.reset();
   }
@@ -3031,6 +3041,10 @@ void ClientChannel::LoadBalancedCall::MaybeRemoveCallFromLbQueuedCallsLocked() {
   queued_pending_lb_pick_ = false;
   // Lame the call combiner canceller.
   lb_call_canceller_ = nullptr;
+  // Add trace annotation
+  if (call_attempt_tracer_ != nullptr) {
+    call_attempt_tracer_->RecordAnnotation("Delayed LB pick complete.");
+  }
 }
 
 void ClientChannel::LoadBalancedCall::MaybeAddCallToLbQueuedCallsLocked() {

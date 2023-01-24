@@ -61,7 +61,10 @@ grpc_cc_test(
     srcs = ["endpoint_pair_test.cc"],
     external_deps = ["gtest"],
     language = "C++",
-    tags = ["endpoint_test"],
+    tags = [
+        "endpoint_test",
+        "event_engine_client_test",
+    ],
     deps = [
         ":endpoint_tests",
         "//:gpr",
@@ -245,11 +248,13 @@ grpc_cc_test(
     language = "C++",
     tags = [
         "endpoint_test",
+        "event_engine_client_test",
         "no_windows",
     ],
     deps = [
         "//:gpr",
         "//:grpc",
+        "//src/core:channel_args",
         "//test/core/util:grpc_test_util",
         "//test/core/util:grpc_test_util_base",
     ],
@@ -268,6 +273,7 @@ grpc_cc_test(
         ":endpoint_tests",
         "//:gpr",
         "//:grpc",
+        "//src/core:channel_args",
         "//src/core:slice",
         "//test/core/util:grpc_test_util",
         "//test/core/util:grpc_test_util_base",

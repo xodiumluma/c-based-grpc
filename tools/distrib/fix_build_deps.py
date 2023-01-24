@@ -34,7 +34,6 @@ avoidness = collections.defaultdict(int)
 consumes = {}
 no_update = set()
 buildozer_commands = []
-needs_codegen_base_src = set()
 original_deps = {}
 original_external_deps = {}
 skip_headers = collections.defaultdict(set)
@@ -137,10 +136,26 @@ EXTERNAL_DEPS = {
         'address_sorting',
     'ares.h':
         'cares',
+    'google/api/monitored_resource.pb.h':
+        'google/api:monitored_resource_cc_proto',
+    'google/devtools/cloudtrace/v2/tracing.grpc.pb.h':
+        'googleapis_trace_grpc_service',
+    'google/logging/v2/logging.grpc.pb.h':
+        'googleapis_logging_grpc_service',
+    'google/logging/v2/logging.pb.h':
+        'googleapis_logging_cc_proto',
+    'google/logging/v2/log_entry.pb.h':
+        'googleapis_logging_cc_proto',
+    'google/monitoring/v3/metric_service.grpc.pb.h':
+        'googleapis_monitoring_grpc_service',
     'gmock/gmock.h':
         'gtest',
     'gtest/gtest.h':
         'gtest',
+    'opencensus/exporters/stats/stackdriver/stackdriver_exporter.h':
+        'opencensus-stats-stackdriver_exporter',
+    'opencensus/exporters/trace/stackdriver/stackdriver_exporter.h':
+        'opencensus-trace-stackdriver_exporter',
     'opencensus/trace/context_util.h':
         'opencensus-trace-context_util',
     'opencensus/trace/propagation/grpc_trace_bin.h':
@@ -234,6 +249,8 @@ INTERNAL_DEPS = {
         '//src/proto/grpc/reflection/v1alpha:reflection_proto',
     'src/proto/grpc/gcp/transport_security_common.upb.h':
         'alts_upb',
+    'src/proto/grpc/gcp/handshaker.upb.h':
+        'alts_upb',
     'src/proto/grpc/gcp/altscontext.upb.h':
         'alts_upb',
     'src/proto/grpc/lookup/v1/rls.upb.h':
@@ -319,8 +336,6 @@ def grpc_cc_library(name,
             m = re.search(r'^#include "(.*)"', line)
             if m:
                 inc.add(m.group(1))
-            if 'grpc::g_glip' in line or 'grpc::g_core_codegen_interface' in line:
-                needs_codegen_base_src.add(name)
     consumes[name] = list(inc)
 
 
@@ -405,6 +420,7 @@ for dirname in [
         "",
         "src/core",
         "src/cpp/ext/gcp",
+        "src/cpp/ext/filters/logging",
         "test/core/uri",
         "test/core/util",
         "test/core/end2end",
@@ -533,6 +549,9 @@ def make_library(library):
         if hdr in skip_headers[library]:
             continue
 
+        if hdr == 'systemd/sd-daemon.h':
+            continue
+
         if hdr == 'src/core/lib/profiling/stap_probes.h':
             continue
 
@@ -546,7 +565,7 @@ def make_library(library):
 
         if hdr in INTERNAL_DEPS:
             dep = INTERNAL_DEPS[hdr]
-            if not dep.startswith('//'):
+            if not ('//' in dep):
                 dep = '//:' + dep
             deps.add(dep, hdr)
             continue
@@ -623,25 +642,30 @@ def make_library(library):
     return (library, error, deps, external_deps)
 
 
-update_libraries = []
-for library in sorted(consumes.keys()):
-    if library in no_update:
-        continue
-    if args.targets and library not in args.targets:
-        continue
-    update_libraries.append(library)
-with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as p:
-    updated_libraries = p.map(make_library, update_libraries, 1)
+def main() -> None:
+    update_libraries = []
+    for library in sorted(consumes.keys()):
+        if library in no_update:
+            continue
+        if args.targets and library not in args.targets:
+            continue
+        update_libraries.append(library)
+    with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as p:
+        updated_libraries = p.map(make_library, update_libraries, 1)
 
-error = False
-for library, lib_error, deps, external_deps in updated_libraries:
-    if lib_error:
-        error = True
-        continue
-    buildozer_set_list('external_deps', external_deps, library, via='deps')
-    buildozer_set_list('deps', deps, library)
+    error = False
+    for library, lib_error, deps, external_deps in updated_libraries:
+        if lib_error:
+            error = True
+            continue
+        buildozer_set_list('external_deps', external_deps, library, via='deps')
+        buildozer_set_list('deps', deps, library)
 
-run_buildozer.run_buildozer(buildozer_commands)
+    run_buildozer.run_buildozer(buildozer_commands)
 
-if error:
-    sys.exit(1)
+    if error:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -102,9 +102,13 @@ grpc_cc_test(
 grpc_cc_test(
     name = "lock_free_event_test",
     srcs = ["lock_free_event_test.cc"],
-    external_deps = ["gtest"],
+    external_deps = [
+        "benchmark",
+        "gtest",
+    ],
     language = "C++",
     tags = [
+        "no_mac",
         "no_windows",
     ],
     uses_event_engine = True,
@@ -206,6 +210,7 @@ grpc_cc_test(
     uses_event_engine = False,
     deps = [
         "//src/core:event_engine_common",
+        "//src/core:event_engine_tcp_socket_utils",
         "//src/core:posix_event_engine_listener_utils",
         "//src/core:posix_event_engine_tcp_socket_utils",
         "//src/core:socket_mutator",
@@ -224,6 +229,7 @@ grpc_cc_test(
     uses_event_engine = True,
     uses_polling = True,
     deps = [
+        "//src/core:channel_args",
         "//src/core:event_engine_poller",
         "//src/core:posix_event_engine",
         "//src/core:posix_event_engine_closure",

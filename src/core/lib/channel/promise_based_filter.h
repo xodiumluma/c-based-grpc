@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef GRPC_CORE_LIB_CHANNEL_PROMISE_BASED_FILTER_H
-#define GRPC_CORE_LIB_CHANNEL_PROMISE_BASED_FILTER_H
+#ifndef GRPC_SRC_CORE_LIB_CHANNEL_PROMISE_BASED_FILTER_H
+#define GRPC_SRC_CORE_LIB_CHANNEL_PROMISE_BASED_FILTER_H
 
 // Scaffolding to allow the per-call part of a filter to be authored in a
 // promise-style. Most of this will be removed once the promises conversion is
@@ -31,6 +31,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include "absl/container/inlined_vector.h"
@@ -40,7 +41,7 @@
 #include "absl/types/optional.h"
 
 #include <grpc/event_engine/event_engine.h>
-#include <grpc/impl/codegen/grpc_types.h>
+#include <grpc/grpc.h>
 #include <grpc/support/log.h>
 
 #include "src/core/lib/channel/call_finalization.h"
@@ -319,6 +320,8 @@ class BaseCallData : public Activity, private Wakeable {
       // We've got the completion callback, we'll close things out during poll
       // and then forward completion callbacks up and transition back to idle.
       kBatchCompleted,
+      // We're almost done, but need to poll first.
+      kCancelledButNotYetPolled,
       // We're done.
       kCancelled,
     };
@@ -405,6 +408,9 @@ class BaseCallData : public Activity, private Wakeable {
       // On the next poll we'll close things out and forward on completions,
       // then transition to cancelled.
       kBatchCompletedButCancelled,
+      // Completed successfully while we're processing a recv message.
+      kCompletedWhilePushedToPipe,
+      kCompletedWhilePulledFromPipe,
     };
     static const char* StateString(State);
 
@@ -848,4 +854,4 @@ MakePromiseBasedFilter(const char* name) {
 
 }  // namespace grpc_core
 
-#endif  // GRPC_CORE_LIB_CHANNEL_PROMISE_BASED_FILTER_H
+#endif  // GRPC_SRC_CORE_LIB_CHANNEL_PROMISE_BASED_FILTER_H

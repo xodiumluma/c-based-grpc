@@ -60,6 +60,10 @@ config_setting(
   values = {"apple_platform_type": "ios"},
 )
 
+config_setting(
+  name = "systemd",
+  values = {"define": "use_systemd=true"},
+)
 selects.config_setting_group(
   name = "grpc_no_xds",
   match_any = [
@@ -130,6 +134,11 @@ config_setting(
 )
 
 config_setting(
+  name = "mac_arm64",
+  values = {"cpu": "darwin_arm64"},
+)
+
+config_setting(
   name = "use_strict_warning",
   values = {"define": "use_strict_warning=true"},
 )
@@ -138,9 +147,9 @@ python_config_settings()
 
 # update this when build_handwritten.yaml gets updated
 # > the following are not used
-g_stands_for = "galaxy"
-core_version = "28.0.0" 
-version = "1.51.0-dev"
+g_stands_for = "glockenspiel"
+core_version = "30.0.0" 
+version = "1.53.0-dev"
 # > end
 
 GPR_PUBLIC_HDRS = [
@@ -165,6 +174,8 @@ GPR_PUBLIC_HDRS = [
   "include/grpc/impl/codegen/atm_gcc_atomic.h",
   "include/grpc/impl/codegen/atm_gcc_sync.h",
   "include/grpc/impl/codegen/atm_windows.h",
+  "include/grpc/impl/codegen/fork.h",
+  "include/grpc/impl/codegen/gpr_types.h",
   "include/grpc/impl/codegen/log.h",
   "include/grpc/impl/codegen/port_platform.h",
   "include/grpc/impl/codegen/sync.h",
@@ -186,15 +197,21 @@ GRPC_PUBLIC_HDRS = [
   "include/grpc/grpc_security_constants.h",
   "include/grpc/slice.h",
   "include/grpc/slice_buffer.h",
+  "include/grpc/status.h",
   "include/grpc/load_reporting.h",
   "include/grpc/support/workaround_list.h",
   "include/grpc/impl/codegen/byte_buffer.h",
   "include/grpc/impl/codegen/byte_buffer_reader.h",
   "include/grpc/impl/codegen/compression_types.h",
+  "include/grpc/impl/codegen/connectivity_state.h",
   "include/grpc/impl/codegen/grpc_types.h",
   "include/grpc/impl/codegen/propagation_bits.h",
   "include/grpc/impl/codegen/status.h",
   "include/grpc/impl/codegen/slice.h",
+  "include/grpc/impl/compression_types.h",
+  "include/grpc/impl/grpc_types.h",
+  "include/grpc/impl/propagation_bits.h",
+  "include/grpc/impl/slice_type.h",
 ]
 
 GRPC_PUBLIC_EVENT_ENGINE_HDRS = [
@@ -206,9 +223,10 @@ GRPC_PUBLIC_EVENT_ENGINE_HDRS = [
   "include/grpc/event_engine/internal/memory_allocator_impl.h",
   "include/grpc/event_engine/slice.h",
   "include/grpc/event_engine/slice_buffer.h",
+  "include/grpc/event_engine/internal/slice_cast.h",
 ]
 
-GRPCCXX_SRCS = [
+GRPCXX_SRCS = [
   "src/cpp/client/channel_cc.cc",
   "src/cpp/client/client_callback.cc",
   "src/cpp/client/client_context.cc",
@@ -216,18 +234,17 @@ GRPCCXX_SRCS = [
   "src/cpp/client/create_channel.cc",
   "src/cpp/client/create_channel_internal.cc",
   "src/cpp/client/create_channel_posix.cc",
-  "src/cpp/client/credentials_cc.cc",
   "src/cpp/common/alarm.cc",
   "src/cpp/common/channel_arguments.cc",
   "src/cpp/common/channel_filter.cc",
   "src/cpp/common/completion_queue_cc.cc",
-  "src/cpp/common/core_codegen.cc",
   "src/cpp/common/resource_quota_cc.cc",
   "src/cpp/common/rpc_method.cc",
   "src/cpp/common/version_cc.cc",
   "src/cpp/common/validate_service_config.cc",
   "src/cpp/server/async_generic_service.cc",
   "src/cpp/server/channel_argument_option.cc",
+  "src/app/server/create_default_thread_pool.cc",
   "src/cpp/server/external_connection_acceptor_impl.cc",
   "src/cpp/server/health/default_health_check_service.cc",
   "src/cpp/server/health/health_check_service.cc",
@@ -236,13 +253,10 @@ GRPCCXX_SRCS = [
   "src/cpp/server/server_callback.cc",
   "src/cpp/server/server_cc.cc",
   "src/cpp/server/server_context.cc",
-  "src/cpp/server/server_credentials.cc",
   "src/cpp/server/server_posix.cc",
   "src/cpp/thread_manager/thread_manager.cc",
   "src/cpp/util/byte_buffer_cc.cc",
-  "src/cpp/util/status.cc",
-  "src/cpp/util/sring_ref.cc",
+  "src/cpp/util/string_ref.cc",
   "src/cpp/util/time_cc.cc",
-  "src/cpp/codegen/codegen_init.cc",
 ]
 

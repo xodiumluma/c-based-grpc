@@ -54,6 +54,7 @@ grpc_cc_library(
 grpc_cc_library(
     name = "event_engine_common",
     srcs = [
+        "lib/event_engine/event_engine.cc",
         "lib/event_engine/resolved_address.cc",
         "lib/event_engine/slice.cc",
         "lib/event_engine/slice_buffer.cc",
@@ -1741,6 +1742,7 @@ grpc_cc_library(
         "status_helper",
         "strerror",
         "time",
+        "//:debug_location",
         "//:event_engine_base_hdrs",
         "//:gpr",
         "//:grpc_public_hdrs",

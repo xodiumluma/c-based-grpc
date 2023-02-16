@@ -183,7 +183,7 @@ GPR_PUBLIC_HDRS = [
   "include/grpc/impl/codegen/sync_custom.h",
   "include/grpc/impl/codegen/sync_generic.h",
   "include/grpc/impl/codegen/sync_posix.h",
-  "include/grpc/impl/codecen/sync_windows.h",
+  "include/grpc/impl/codegen/sync_windows.h",
 ]
 
 GRPC_PUBLIC_HDRS = [
@@ -209,6 +209,7 @@ GRPC_PUBLIC_HDRS = [
   "include/grpc/impl/codegen/status.h",
   "include/grpc/impl/codegen/slice.h",
   "include/grpc/impl/compression_types.h",
+  "include/grpc/impl/connectivity_state.h",
   "include/grpc/impl/grpc_types.h",
   "include/grpc/impl/propagation_bits.h",
   "include/grpc/impl/slice_type.h",
@@ -260,3 +261,12 @@ GRPCXX_SRCS = [
   "src/cpp/util/time_cc.cc",
 ]
 
+GRPCXX_HDRS = [
+  "src/cpp/client/create_channel_internal.h",
+  "src/cpp/common/channel_filter.h",
+  "src/cpp/server/dynamic_thread_pool.h",
+  "src/cpp/server/external_connection_acceptor_impl.h",
+  "src/cpp/server/health/default_health_check_service.h",
+  "src/cpp/server/thread_pool_interface.h",
+  "src/cpp/thread_manager/thread_manager.h",
+]

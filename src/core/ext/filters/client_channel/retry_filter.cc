@@ -38,7 +38,6 @@
 #include <grpc/grpc.h>
 #include <grpc/slice.h>
 #include <grpc/status.h>
-#include <grpc/support/atm.h>
 #include <grpc/support/log.h>
 
 #include "src/core/ext/filters/client_channel/client_channel.h"
@@ -168,36 +167,33 @@ class RetryFilter {
                              const grpc_channel_info* /*info*/) {}
 
  private:
-  static size_t GetMaxPerRpcRetryBufferSize(const grpc_channel_args* args) {
-    return static_cast<size_t>(grpc_channel_args_find_integer(
-        args, GRPC_ARG_PER_RPC_RETRY_BUFFER_SIZE,
-        {DEFAULT_PER_RPC_RETRY_BUFFER_SIZE, 0, INT_MAX}));
+  static size_t GetMaxPerRpcRetryBufferSize(const ChannelArgs& args) {
+    return Clamp(args.GetInt(GRPC_ARG_PER_RPC_RETRY_BUFFER_SIZE)
+                     .value_or(DEFAULT_PER_RPC_RETRY_BUFFER_SIZE),
+                 0, INT_MAX);
   }
 
-  RetryFilter(const grpc_channel_args* args, grpc_error_handle* error)
-      : client_channel_(grpc_channel_args_find_pointer<ClientChannel>(
-            args, GRPC_ARG_CLIENT_CHANNEL)),
+  RetryFilter(const ChannelArgs& args, grpc_error_handle* error)
+      : client_channel_(args.GetObject<ClientChannel>()),
         per_rpc_retry_buffer_size_(GetMaxPerRpcRetryBufferSize(args)),
         service_config_parser_index_(
             internal::RetryServiceConfigParser::ParserIndex()) {
     // Get retry throttling parameters from service config.
-    auto* service_config = grpc_channel_args_find_pointer<ServiceConfig>(
-        args, GRPC_ARG_SERVICE_CONFIG_OBJ);
+    auto* service_config = args.GetObject<ServiceConfig>();
     if (service_config == nullptr) return;
     const auto* config = static_cast<const RetryGlobalConfig*>(
         service_config->GetGlobalParsedConfig(
             RetryServiceConfigParser::ParserIndex()));
     if (config == nullptr) return;
     // Get server name from target URI.
-    const char* server_uri =
-        grpc_channel_args_find_string(args, GRPC_ARG_SERVER_URI);
-    if (server_uri == nullptr) {
+    auto server_uri = args.GetString(GRPC_ARG_SERVER_URI);
+    if (!server_uri.has_value()) {
       *error = GRPC_ERROR_CREATE(
           "server URI channel arg missing or wrong type in client channel "
           "filter");
       return;
     }
-    absl::StatusOr<URI> uri = URI::Parse(server_uri);
+    absl::StatusOr<URI> uri = URI::Parse(*server_uri);
     if (!uri.ok() || uri->path().empty()) {
       *error =
           GRPC_ERROR_CREATE("could not extract server name from target URI");
@@ -615,15 +611,6 @@ class RetryFilter::CallData {
   // send_initial_metadata
   bool seen_send_initial_metadata_ = false;
   grpc_metadata_batch send_initial_metadata_{arena_};
-  // TODO(roth): As part of implementing hedging, we'll probably need to
-  // have the LB call set a value in CallAttempt and then propagate it
-  // from CallAttempt to the parent call when we commit.  Otherwise, we
-  // may leave this with a value for a peer other than the one we
-  // actually commit to.  Alternatively, maybe see if there's a way to
-  // change the surface API such that the peer isn't available until
-  // after initial metadata is received?  (Could even change the
-  // transport API to return this with the recv_initial_metadata op.)
-  gpr_atm* peer_string_;
   // send_message
   // When we get a send_message op, we replace the original byte stream
   // with a CachingByteStream that caches the slices to a local buffer for
@@ -1989,7 +1976,6 @@ void RetryFilter::CallData::CallAttempt::BatchData::
   batch_.send_initial_metadata = true;
   batch_.payload->send_initial_metadata.send_initial_metadata =
       &call_attempt_->send_initial_metadata_;
-  batch_.payload->send_initial_metadata.peer_string = calld->peer_string_;
 }
 
 void RetryFilter::CallData::CallAttempt::BatchData::
@@ -2337,7 +2323,6 @@ void RetryFilter::CallData::MaybeCacheSendOpsForBatch(PendingBatch* pending) {
     grpc_metadata_batch* send_initial_metadata =
         batch->payload->send_initial_metadata.send_initial_metadata;
     send_initial_metadata_ = send_initial_metadata->Copy();
-    peer_string_ = batch->payload->send_initial_metadata.peer_string;
   }
   // Set up cache for send_message ops.
   if (batch->send_message) {

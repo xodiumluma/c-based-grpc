@@ -46,6 +46,24 @@ grpc_cc_test(
 )
 
 grpc_cc_test(
+    name = "interceptor_list_test",
+    srcs = ["interceptor_list_test.cc"],
+    external_deps = ["gtest"],
+    language = "c++",
+    uses_event_engine = False,
+    uses_polling = False,
+    deps = [
+        "test_context",
+        "//:ref_counted_ptr",
+        "//src/core:arena",
+        "//src/core:event_engine_memory_allocator",
+        "//src/core:interceptor_list",
+        "//src/core:memory_quota",
+        "//src/core:resource_quota",
+    ],
+)
+
+grpc_cc_test(
     name = "context_test",
     srcs = ["context_test.cc"],
     external_deps = ["gtest"],
@@ -378,7 +396,7 @@ grpc_cc_test(
     uses_polling = False,
     deps = [
         "test_wakeup_schedulers",
-        "//:gpr",
+        "//:grpc",
         "//:ref_counted_ptr",
         "//src/core:activity",
         "//src/core:basic_join",
@@ -496,16 +514,31 @@ grpc_cc_test(
 )
 
 grpc_cc_test(
-    name = "try_concurrently_test",
-    srcs = ["try_concurrently_test.cc"],
+    name = "party_test",
+    srcs = ["party_test.cc"],
     external_deps = [
-        "absl/status",
-        "absl/strings",
+        "absl/base:core_headers",
         "gtest",
     ],
     language = "c++",
     tags = ["promise_test"],
     uses_event_engine = False,
     uses_polling = False,
-    deps = ["//src/core:try_concurrently"],
+    deps = [
+        "//:exec_ctx",
+        "//:gpr",
+        "//:grpc_unsecure",
+        "//:orphanable",
+        "//:ref_counted_ptr",
+        "//src/core:1999",
+        "//src/core:context",
+        "//src/core:default_event_engine",
+        "//src/core:event_engine_memory_allocator",
+        "//src/core:memory_quota",
+        "//src/core:notification",
+        "//src/core:resource_quota",
+        "//src/core:seq",
+        "//src/core:sleep",
+        "//src/core:time",
+    ],
 )

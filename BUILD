@@ -397,10 +397,8 @@ GRPCXX_PUBLIC_HDRS = [
     "include/grpcpp/health_check_service_interface.h",
     "include/grpcpp/impl/call_hook.h",
     "include/grpcpp/impl/call_op_set_interface.h",
-    "include/grpcpp/impl/call_op_set.h",
     "include/grpcpp/impl/call.h",
     "include/grpcpp/impl/channel_argument_option.h",
-    "include/grpcpp/impl/channel_interface.h",
     "include/grpcpp/impl/client_unary_call.h",
     "include/grpcpp/impl/completion_queue_tag.h",
     "include/grpcpp/impl/create_auth_context.h",
@@ -2910,7 +2908,6 @@ grpc_cc_library(
         "absl/status",
         "absl/status:statusor",
         "absl/strings",
-        "absl/types:optional",
     ],
     language = "c++",
     visibility = ["@grpc:client_channel"],
@@ -2921,6 +2918,7 @@ grpc_cc_library(
         "//src/core:channel_args",
         "//src/core:grpc_service_config",
         "//src/core:json",
+
         "//src/core:json_args",
         "//src/core:json_object_loader",
         "//src/core:json_reader",
@@ -2928,7 +2926,6 @@ grpc_cc_library(
         "//src/core:service_config_parser",
         "//src/core:slice",
         "//src/core:slice_refcount",
-        "//src/core:validation_errors",
     ],
 )
 
@@ -3014,7 +3011,6 @@ grpc_cc_library(
         "//src/core:ext/filters/client_channel/client_channel_channelz.cc",
         "//src/core:ext/filters/client_channel/client_channel_factory.cc",
         "//src/core:ext/filters/client_channel/client_channel_plugin.cc",
-        "//src/core:ext/filters/client_channel/client_channel_service_config.cc",
         "//src/core:ext/filters/client_channel/config_selector.cc",
         "//src/core:ext/filters/client_channel/dynamic_filters.cc",
         "//src/core:ext/filters/client_channel/global_subchannel_pool.cc",
@@ -3022,6 +3018,7 @@ grpc_cc_library(
         "//src/core:ext/filters/client_channel/lb_policy/child_policy_handler.cc",
         "//src/core:ext/filters/client_channel/lb_policy/oob_backend_metric.cc",
         "//src/core:ext/filters/client_channel/local_subchannel_pool.cc",
+        "//src/core:ext/filters/client_channel/resolver_result_parsing.cc",
         "//src/core:ext/filters/client_channel/retry_filter.cc",
         "//src/core:ext/filters/client_channel/retry_filter_legacy_call_data.cc",
         "//src/core:ext/filters/client_channel/retry_service_config.cc",
@@ -3048,6 +3045,7 @@ grpc_cc_library(
         "//src/core:ext/filters/client_channel/lb_policy/oob_backend_metric.h",
         "//src/core:ext/filters/client_channel/lb_policy/oob_backend_metric_internal.h",
         "//src/core:ext/filters/client_channel/local_subchannel_pool.h",
+        "//src/core:ext/filters/client_channel/resolver_result_parsing.h",
         "//src/core:ext/filters/client_channel/retry_filter.h",
         "//src/core:ext/filters/client_channel/retry_filter_legacy_call_data.h",
         "//src/core:ext/filters/client_channel/retry_service_config.h",
@@ -3157,7 +3155,6 @@ grpc_cc_library(
         "//src/core:try_seq",
         "//src/core:unique_type_name",
         "//src/core:useful",
-        "//src/core:validation_errors",
     ],
 )
 

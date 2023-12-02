@@ -26,11 +26,11 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
 #include "absl/types/optional.h"
 
 #include <grpc/event_engine/memory_allocator.h>
@@ -297,7 +297,7 @@ class BasicMemoryQuota final
     size_t max_recommended_allocation_size = 0;
   };
 
-  explicit BasicMemoryQuota(std::string name) : name_(std::move(name)) {}
+  explicit BasicMemoryQuota(std::string name);
 
   // Start the reclamation activity.
   void Start();
@@ -340,7 +340,7 @@ class BasicMemoryQuota final
     struct Shard {
       absl::flat_hash_set<GrpcMemoryAllocatorImpl*> allocators
           ABSL_GUARDED_BY(shard_mu);
-      absl::Mutex shard_mu;
+      Mutex shard_mu;
     };
 
     Shard& SelectShard(void* key) {
@@ -392,7 +392,7 @@ class BasicMemoryQuota final
 class GrpcMemoryAllocatorImpl final : public EventEngineMemoryAllocatorImpl {
  public:
   explicit GrpcMemoryAllocatorImpl(
-      std::shared_ptr<BasicMemoryQuota> memory_quota, std::string name);
+      std::shared_ptr<BasicMemoryQuota> memory_quota);
   ~GrpcMemoryAllocatorImpl() override;
 
   // Reserve bytes from the quota.
@@ -445,9 +445,6 @@ class GrpcMemoryAllocatorImpl final : public EventEngineMemoryAllocatorImpl {
     return memory_quota_->GetPressureInfo();
   }
 
-  // Name of this allocator
-  absl::string_view name() const { return name_; }
-
   size_t GetFreeBytes() const {
     return free_bytes_.load(std::memory_order_relaxed);
   }
@@ -460,7 +457,7 @@ class GrpcMemoryAllocatorImpl final : public EventEngineMemoryAllocatorImpl {
   static constexpr size_t kMaxQuotaBufferSize = 1024 * 1024;
 
   // Primitive reservation function.
-  absl::optional<size_t> TryReserve(MemoryRequest request) GRPC_MUST_USE_RESULT;
+  GRPC_MUST_USE_RESULT absl::optional<size_t> TryReserve(MemoryRequest request);
   // This function may be invoked during a memory release operation.
   // It will try to return half of our free pool to the quota.
   void MaybeDonateBack();
@@ -494,9 +491,6 @@ class GrpcMemoryAllocatorImpl final : public EventEngineMemoryAllocatorImpl {
   OrphanablePtr<ReclaimerQueue::Handle>
       reclamation_handles_[kNumReclamationPasses] ABSL_GUARDED_BY(
           reclaimer_mu_);
-
-  // Name of this allocator.
-  std::string name_;
 };
 
 // MemoryOwner is an enhanced MemoryAllocator that can also reclaim memory, and
@@ -531,9 +525,6 @@ class MemoryOwner final : public MemoryAllocator {
     return OrphanablePtr<T>(New<T>(std::forward<Args>(args)...));
   }
 
-  // Name of this object
-  absl::string_view name() const { return impl()->name(); }
-
   // Is this object valid (ie has not been moved out of or reset)
   bool is_valid() const { return impl() != nullptr; }
 
@@ -565,7 +556,7 @@ class MemoryQuota final
   MemoryQuota& operator=(MemoryQuota&&) = default;
 
   MemoryAllocator CreateMemoryAllocator(absl::string_view name) override;
-  MemoryOwner CreateMemoryOwner(absl::string_view name);
+  MemoryOwner CreateMemoryOwner();
 
   // Resize the quota to new_size.
   void SetSize(size_t new_size) { memory_quota_->SetSize(new_size); }
@@ -586,6 +577,8 @@ using MemoryQuotaRefPtr = std::shared_ptr<MemoryQuota>;
 inline MemoryQuotaRefPtr MakeMemoryQuota(std::string name) {
   return std::make_shared<MemoryQuota>(std::move(name));
 }
+
+std::vector<std::shared_ptr<BasicMemoryQuota>> AllMemoryQuotas();
 
 }  // namespace grpc_core
 

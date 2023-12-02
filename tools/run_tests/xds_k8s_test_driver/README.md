@@ -24,21 +24,28 @@ changes to this codebase at the moment.
 ## Installation
 
 #### Requirements
-1. Python v3.7+
+1. Python v3.9+
 2. [Google Cloud SDK](https://cloud.google.com/sdk/docs/install)
 3. `kubectl`
 
 `kubectl` can be installed via `gcloud components install kubectl`, or system package manager: https://kubernetes.io/docs/tasks/tools/#kubectl
 
+Python3 venv tool may need to be installed from APT on some Ubuntu systems:
+```shell
+sudo apt-get install python3-venv
+```
+
 ##### Getting Started
 
 1. If you haven't, [initialize](https://cloud.google.com/sdk/docs/install-sdk) gcloud SDK
-2. Activate gcloud [configuration](https://cloud.google.com/sdk/docs/configurations) with your project 
+2. Activate gcloud [configuration](https://cloud.google.com/sdk/docs/configurations) with your project
 3. Enable gcloud services:
    ```shell
    gcloud services enable \
      compute.googleapis.com \
      container.googleapis.com \
+     logging.googleapis.com \
+     monitoring.googleapis.com \
      networksecurity.googleapis.com \
      networkservices.googleapis.com \
      secretmanager.googleapis.com \
@@ -46,8 +53,7 @@ changes to this codebase at the moment.
    ```
 
 #### Configure GKE cluster
-This is an example outlining minimal requirements to run the [baseline tests](xds-baseline-tests).
- 
+This is an example outlining minimal requirements to run the [baseline tests](#xds-baseline-tests).
 Update gloud sdk:
 ```shell
 gcloud -q components update
@@ -84,7 +90,6 @@ gcloud container clusters create "${CLUSTER_NAME}" \
  --workload-metadata=GKE_METADATA \
  --tags=allow-health-checks
 ```
-
 For security tests you also need to create CAs and configure the cluster to use those CAs
 as described
 [here](https://cloud.google.com/traffic-director/docs/security-proxyless-setup#configure-cas).
@@ -163,6 +168,10 @@ END
 # Unless you're using GCP VM with preconfigured Application Default Credentials, acquire them for your user
 gcloud auth application-default login
 
+# Install authentication plugin for kubectl.
+# Details: https://cloud.google.com/blog/products/containers-kubernetes/kubectl-auth-changes-in-gke
+gcloud components install gke-gcloud-auth-plugin
+
 # Configuring GKE cluster access for kubectl
 gcloud container clusters get-credentials "${CLUSTER_NAME}" --zone "${ZONE}"
 
@@ -174,7 +183,7 @@ export KUBE_CONTEXT="$(kubectl config current-context)"
 
 ```shell
 # Create python virtual environment
-python3.7 -m venv venv
+python3 -m venv venv
 
 # Activate virtual environment
 . ./venv/bin/activate
@@ -205,7 +214,7 @@ from your dev environment. You need:
 
 ### Making changes to the driver
 1. Install additional dev packages: `pip install -r requirements-dev.txt`
-2. Use `./bin/yapf.sh` and `./bin/isort.sh` helpers to auto-format code.
+2. Use `./bin/black.sh` and `./bin/isort.sh` helpers to auto-format code.
 
 ### Updating Python Dependencies
 
@@ -355,13 +364,13 @@ XDS_K8S_CONFIG=./path-to-flagfile.cfg ./run.sh bin/run_td_setup.py --resource_su
 ./run.sh bin/run_td_setup.py --security=mtls
 
 # Start test server in a secure mode
-./run.sh bin/run_test_server.py --secure
+./run.sh bin/run_test_server.py --mode=secure
 
 # Add test server to the backend service
 ./run.sh bin/run_td_setup.py --cmd=backends-add
 
-# Start test client in a secure more --secure
-./run.sh bin/run_test_client.py --secure
+# Start test client in a secure more --mode=secure
+./run.sh bin/run_test_client.py --mode=secure
 ```
 
 ### Sending RPCs
@@ -421,9 +430,9 @@ Cleanup regular and security-specific resources:
 # Cleanup TD resources, with security
 ./run.sh bin/run_td_setup.py --cmd=cleanup --security=mtls
 # Stop test client (secure)
-./run.sh bin/run_test_client.py --cmd=cleanup --secure
+./run.sh bin/run_test_client.py --cmd=cleanup --mode=secure
 # Stop test server (secure), and remove the namespace
-./run.sh bin/run_test_server.py --cmd=cleanup --cleanup_namespace --secure
+./run.sh bin/run_test_server.py --cmd=cleanup --cleanup_namespace --mode=secure
 ```
 
 In addition, here's some other helpful partial cleanup commands:

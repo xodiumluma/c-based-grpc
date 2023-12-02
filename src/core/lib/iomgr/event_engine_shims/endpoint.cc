@@ -18,7 +18,9 @@
 #include <atomic>
 #include <memory>
 
+#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 
 #include <grpc/event_engine/event_engine.h>
@@ -33,6 +35,8 @@
 #include "src/core/lib/event_engine/tcp_socket_utils.h"
 #include "src/core/lib/event_engine/trace.h"
 #include "src/core/lib/gpr/string.h"
+#include "src/core/lib/gprpp/construct_destruct.h"
+#include "src/core/lib/gprpp/debug_location.h"
 #include "src/core/lib/gprpp/sync.h"
 #include "src/core/lib/iomgr/closure.h"
 #include "src/core/lib/iomgr/endpoint.h"
@@ -58,29 +62,23 @@ class EventEngineEndpointWrapper {
   struct grpc_event_engine_endpoint {
     grpc_endpoint base;
     EventEngineEndpointWrapper* wrapper;
-    std::aligned_storage<sizeof(SliceBuffer), alignof(SliceBuffer)>::type
-        read_buffer;
-    std::aligned_storage<sizeof(SliceBuffer), alignof(SliceBuffer)>::type
-        write_buffer;
+    alignas(SliceBuffer) char read_buffer[sizeof(SliceBuffer)];
+    alignas(SliceBuffer) char write_buffer[sizeof(SliceBuffer)];
   };
 
   explicit EventEngineEndpointWrapper(
       std::unique_ptr<EventEngine::Endpoint> endpoint);
+
+  EventEngine::Endpoint* endpoint() { return endpoint_.get(); }
 
   int Fd() {
     grpc_core::MutexLock lock(&mu_);
     return fd_;
   }
 
-  absl::string_view PeerAddress() {
-    grpc_core::MutexLock lock(&mu_);
-    return peer_address_;
-  }
+  absl::string_view PeerAddress() { return peer_address_; }
 
-  absl::string_view LocalAddress() {
-    grpc_core::MutexLock lock(&mu_);
-    return local_address_;
-  }
+  absl::string_view LocalAddress() { return local_address_; }
 
   void Ref() { refs_.fetch_add(1, std::memory_order_relaxed); }
   void Unref() {
@@ -94,15 +92,100 @@ class EventEngineEndpointWrapper {
   grpc_endpoint* GetGrpcEndpoint() { return &eeep_->base; }
 
   // Read using the underlying EventEngine endpoint object.
-  void Read(absl::AnyInvocable<void(absl::Status)> on_read, SliceBuffer* buffer,
+  bool Read(grpc_closure* read_cb, grpc_slice_buffer* pending_read_buffer,
             const EventEngine::Endpoint::ReadArgs* args) {
-    endpoint_->Read(std::move(on_read), buffer, args);
+    Ref();
+    pending_read_cb_ = read_cb;
+    pending_read_buffer_ = pending_read_buffer;
+    // TODO(vigneshbabu): Use SliceBufferCast<> here.
+    grpc_core::Construct(reinterpret_cast<SliceBuffer*>(&eeep_->read_buffer),
+                         SliceBuffer::TakeCSliceBuffer(*pending_read_buffer_));
+    SliceBuffer* read_buffer =
+        reinterpret_cast<SliceBuffer*>(&eeep_->read_buffer);
+    read_buffer->Clear();
+    return endpoint_->Read(
+        [this](absl::Status status) { FinishPendingRead(status); }, read_buffer,
+        args);
+  }
+
+  void FinishPendingRead(absl::Status status) {
+    auto* read_buffer = reinterpret_cast<SliceBuffer*>(&eeep_->read_buffer);
+    grpc_slice_buffer_move_into(read_buffer->c_slice_buffer(),
+                                pending_read_buffer_);
+    read_buffer->~SliceBuffer();
+    if (GRPC_TRACE_FLAG_ENABLED(grpc_tcp_trace)) {
+      size_t i;
+      gpr_log(GPR_INFO, "TCP: %p READ error=%s", eeep_->wrapper,
+              status.ToString().c_str());
+      if (gpr_should_log(GPR_LOG_SEVERITY_DEBUG)) {
+        for (i = 0; i < pending_read_buffer_->count; i++) {
+          char* dump = grpc_dump_slice(pending_read_buffer_->slices[i],
+                                       GPR_DUMP_HEX | GPR_DUMP_ASCII);
+          gpr_log(GPR_DEBUG, "READ DATA: %s", dump);
+          gpr_free(dump);
+        }
+      }
+    }
+    pending_read_buffer_ = nullptr;
+    grpc_closure* cb = pending_read_cb_;
+    pending_read_cb_ = nullptr;
+    if (grpc_core::ExecCtx::Get() == nullptr) {
+      grpc_core::ApplicationCallbackExecCtx app_ctx;
+      grpc_core::ExecCtx exec_ctx;
+      grpc_core::ExecCtx::Run(DEBUG_LOCATION, cb, status);
+    } else {
+      grpc_core::Closure::Run(DEBUG_LOCATION, cb, status);
+    }
+    // For the ref taken in EventEngineEndpointWrapper::Read().
+    Unref();
   }
 
   // Write using the underlying EventEngine endpoint object
-  void Write(absl::AnyInvocable<void(absl::Status)> on_writable,
-             SliceBuffer* data, const EventEngine::Endpoint::WriteArgs* args) {
-    endpoint_->Write(std::move(on_writable), data, args);
+  bool Write(grpc_closure* write_cb, grpc_slice_buffer* slices,
+             const EventEngine::Endpoint::WriteArgs* args) {
+    Ref();
+    if (GRPC_TRACE_FLAG_ENABLED(grpc_tcp_trace)) {
+      size_t i;
+      gpr_log(GPR_INFO, "TCP: %p WRITE (peer=%s)", this,
+              std::string(PeerAddress()).c_str());
+      if (gpr_should_log(GPR_LOG_SEVERITY_DEBUG)) {
+        for (i = 0; i < slices->count; i++) {
+          char* dump =
+              grpc_dump_slice(slices->slices[i], GPR_DUMP_HEX | GPR_DUMP_ASCII);
+          gpr_log(GPR_DEBUG, "WRITE DATA: %s", dump);
+          gpr_free(dump);
+        }
+      }
+    }
+    // TODO(vigneshbabu): Use SliceBufferCast<> here.
+    grpc_core::Construct(reinterpret_cast<SliceBuffer*>(&eeep_->write_buffer),
+                         SliceBuffer::TakeCSliceBuffer(*slices));
+    SliceBuffer* write_buffer =
+        reinterpret_cast<SliceBuffer*>(&eeep_->write_buffer);
+    pending_write_cb_ = write_cb;
+    return endpoint_->Write(
+        [this](absl::Status status) { FinishPendingWrite(status); },
+        write_buffer, args);
+  }
+
+  void FinishPendingWrite(absl::Status status) {
+    auto* write_buffer = reinterpret_cast<SliceBuffer*>(&eeep_->write_buffer);
+    write_buffer->~SliceBuffer();
+    if (GRPC_TRACE_FLAG_ENABLED(grpc_tcp_trace)) {
+      gpr_log(GPR_INFO, "TCP: %p WRITE (peer=%s) error=%s", this,
+              std::string(PeerAddress()).c_str(), status.ToString().c_str());
+    }
+    grpc_closure* cb = pending_write_cb_;
+    pending_write_cb_ = nullptr;
+    if (grpc_core::ExecCtx::Get() == nullptr) {
+      grpc_core::ApplicationCallbackExecCtx app_ctx;
+      grpc_core::ExecCtx exec_ctx;
+      grpc_core::ExecCtx::Run(DEBUG_LOCATION, cb, status);
+    } else {
+      grpc_core::Closure::Run(DEBUG_LOCATION, cb, status);
+    }
+    // For the ref taken in EventEngineEndpointWrapper::Write().
+    Unref();
   }
 
   // Returns true if the endpoint is not yet shutdown. In that case, it also
@@ -168,13 +251,20 @@ class EventEngineEndpointWrapper {
     }
   }
 
+  bool CanTrackErrors() {
+    if (EventEngineSupportsFd()) {
+      return reinterpret_cast<PosixEndpointWithFdSupport*>(endpoint_.get())
+          ->CanTrackErrors();
+    } else {
+      return false;
+    }
+  }
+
  private:
   void OnShutdownInternal() {
     {
       grpc_core::MutexLock lock(&mu_);
       fd_ = -1;
-      local_address_ = "";
-      peer_address_ = "";
     }
     endpoint_.reset();
     // For the Ref taken in TriggerShutdown
@@ -186,8 +276,13 @@ class EventEngineEndpointWrapper {
   std::atomic<int64_t> shutdown_ref_{1};
   absl::AnyInvocable<void(absl::StatusOr<int>)> on_release_fd_;
   grpc_core::Mutex mu_;
-  std::string peer_address_;
-  std::string local_address_;
+  grpc_closure* pending_read_cb_;
+  grpc_closure* pending_write_cb_;
+  grpc_slice_buffer* pending_read_buffer_;
+  const std::string peer_address_{
+      ResolvedAddressToURI(endpoint_->GetPeerAddress()).value_or("")};
+  const std::string local_address_{
+      ResolvedAddressToURI(endpoint_->GetLocalAddress()).value_or("")};
   int fd_{-1};
 };
 
@@ -204,41 +299,11 @@ void EndpointRead(grpc_endpoint* ep, grpc_slice_buffer* slices,
     return;
   }
 
-  eeep->wrapper->Ref();
   EventEngine::Endpoint::ReadArgs read_args = {min_progress_size};
-
-  // TODO(vigneshbabu): Use SliceBufferCast<> here.
-  SliceBuffer* read_buffer = new (&eeep->read_buffer)
-      SliceBuffer(SliceBuffer::TakeCSliceBuffer(*slices));
-  read_buffer->Clear();
-  eeep->wrapper->Read(
-      [eeep, cb, slices](absl::Status status) {
-        auto* read_buffer = reinterpret_cast<SliceBuffer*>(&eeep->read_buffer);
-        grpc_slice_buffer_move_into(read_buffer->c_slice_buffer(), slices);
-        read_buffer->~SliceBuffer();
-        if (GRPC_TRACE_FLAG_ENABLED(grpc_tcp_trace)) {
-          size_t i;
-          gpr_log(GPR_INFO, "TCP: %p READ (peer=%s) error=%s", eeep->wrapper,
-                  std::string(eeep->wrapper->PeerAddress()).c_str(),
-                  status.ToString().c_str());
-          if (gpr_should_log(GPR_LOG_SEVERITY_DEBUG)) {
-            for (i = 0; i < slices->count; i++) {
-              char* dump = grpc_dump_slice(slices->slices[i],
-                                           GPR_DUMP_HEX | GPR_DUMP_ASCII);
-              gpr_log(GPR_DEBUG, "READ DATA: %s", dump);
-              gpr_free(dump);
-            }
-          }
-        }
-        {
-          grpc_core::ApplicationCallbackExecCtx app_ctx;
-          grpc_core::ExecCtx exec_ctx;
-          grpc_core::ExecCtx::Run(DEBUG_LOCATION, cb, status);
-        }
-        // For the ref taken in EndpointRead
-        eeep->wrapper->Unref();
-      },
-      read_buffer, &read_args);
+  if (eeep->wrapper->Read(cb, slices, &read_args)) {
+    // Read succeeded immediately. Run the callback inline.
+    eeep->wrapper->FinishPendingRead(absl::OkStatus());
+  }
 
   eeep->wrapper->ShutdownUnref();
 }
@@ -256,45 +321,11 @@ void EndpointWrite(grpc_endpoint* ep, grpc_slice_buffer* slices,
     return;
   }
 
-  eeep->wrapper->Ref();
   EventEngine::Endpoint::WriteArgs write_args = {arg, max_frame_size};
-  if (GRPC_TRACE_FLAG_ENABLED(grpc_tcp_trace)) {
-    size_t i;
-    gpr_log(GPR_INFO, "TCP: %p WRITE (peer=%s)", eeep->wrapper,
-            std::string(eeep->wrapper->PeerAddress()).c_str());
-    if (gpr_should_log(GPR_LOG_SEVERITY_DEBUG)) {
-      for (i = 0; i < slices->count; i++) {
-        char* dump =
-            grpc_dump_slice(slices->slices[i], GPR_DUMP_HEX | GPR_DUMP_ASCII);
-        gpr_log(GPR_DEBUG, "WRITE DATA: %s", dump);
-        gpr_free(dump);
-      }
-    }
+  if (eeep->wrapper->Write(cb, slices, &write_args)) {
+    // Write succeeded immediately. Run the callback inline.
+    eeep->wrapper->FinishPendingWrite(absl::OkStatus());
   }
-
-  // TODO(vigneshbabu): Use SliceBufferCast<> here.
-  SliceBuffer* write_buffer = new (&eeep->write_buffer)
-      SliceBuffer(SliceBuffer::TakeCSliceBuffer(*slices));
-  eeep->wrapper->Write(
-      [eeep, cb](absl::Status status) {
-        auto* write_buffer =
-            reinterpret_cast<SliceBuffer*>(&eeep->write_buffer);
-        write_buffer->~SliceBuffer();
-        if (GRPC_TRACE_FLAG_ENABLED(grpc_tcp_trace)) {
-          gpr_log(GPR_INFO, "TCP: %p WRITE (peer=%s) error=%s", eeep->wrapper,
-                  std::string(eeep->wrapper->PeerAddress()).c_str(),
-                  status.ToString().c_str());
-        }
-        {
-          grpc_core::ApplicationCallbackExecCtx app_ctx;
-          grpc_core::ExecCtx exec_ctx;
-          grpc_core::ExecCtx::Run(DEBUG_LOCATION, cb, status);
-        }
-        // For the ref taken in EndpointWrite
-        eeep->wrapper->Unref();
-      },
-      write_buffer, &write_args);
-
   eeep->wrapper->ShutdownUnref();
 }
 
@@ -351,7 +382,12 @@ int EndpointGetFd(grpc_endpoint* ep) {
   return eeep->wrapper->Fd();
 }
 
-bool EndpointCanTrackErr(grpc_endpoint* /* ep */) { return false; }
+bool EndpointCanTrackErr(grpc_endpoint* ep) {
+  auto* eeep =
+      reinterpret_cast<EventEngineEndpointWrapper::grpc_event_engine_endpoint*>(
+          ep);
+  return eeep->wrapper->CanTrackErrors();
+}
 
 grpc_endpoint_vtable grpc_event_engine_endpoint_vtable = {
     EndpointRead,
@@ -372,14 +408,6 @@ EventEngineEndpointWrapper::EventEngineEndpointWrapper(
       eeep_(std::make_unique<grpc_event_engine_endpoint>()) {
   eeep_->base.vtable = &grpc_event_engine_endpoint_vtable;
   eeep_->wrapper = this;
-  auto local_addr = ResolvedAddressToURI(endpoint_->GetLocalAddress());
-  if (local_addr.ok()) {
-    local_address_ = *local_addr;
-  }
-  auto peer_addr = ResolvedAddressToURI(endpoint_->GetPeerAddress());
-  if (peer_addr.ok()) {
-    peer_address_ = *peer_addr;
-  }
   if (EventEngineSupportsFd()) {
     fd_ = reinterpret_cast<PosixEndpointWithFdSupport*>(endpoint_.get())
               ->GetWrappedFd();
@@ -400,6 +428,17 @@ grpc_endpoint* grpc_event_engine_endpoint_create(
 
 bool grpc_is_event_engine_endpoint(grpc_endpoint* ep) {
   return ep->vtable == &grpc_event_engine_endpoint_vtable;
+}
+
+EventEngine::Endpoint* grpc_get_wrapped_event_engine_endpoint(
+    grpc_endpoint* ep) {
+  if (!grpc_is_event_engine_endpoint(ep)) {
+    return nullptr;
+  }
+  auto* eeep =
+      reinterpret_cast<EventEngineEndpointWrapper::grpc_event_engine_endpoint*>(
+          ep);
+  return eeep->wrapper->endpoint();
 }
 
 void grpc_event_engine_endpoint_destroy_and_release_fd(

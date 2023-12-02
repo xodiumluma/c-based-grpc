@@ -22,6 +22,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <list>
@@ -31,14 +32,20 @@
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/hash/hash.h"
+#include "absl/random/random.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
 
 #include <grpc/grpc.h>
 #include <grpc/slice.h>
-#include <grpc/support/log.h>
 #include <grpc/support/time.h>
 
+#include "src/core/lib/backoff/random_early_detection.h"
+#include "src/core/lib/channel/call_tracer.h"
 #include "src/core/lib/channel/channel_args.h"
 #include "src/core/lib/channel/channel_fwd.h"
 #include "src/core/lib/channel/channel_stack.h"
@@ -46,7 +53,6 @@
 #include "src/core/lib/debug/trace.h"
 #include "src/core/lib/gprpp/cpp_impl_of.h"
 #include "src/core/lib/gprpp/dual_ref_counted.h"
-#include "src/core/lib/gprpp/notification.h"
 #include "src/core/lib/gprpp/orphanable.h"
 #include "src/core/lib/gprpp/ref_counted_ptr.h"
 #include "src/core/lib/gprpp/sync.h"
@@ -62,9 +68,10 @@
 #include "src/core/lib/surface/completion_queue.h"
 #include "src/core/lib/transport/metadata_batch.h"
 #include "src/core/lib/transport/transport.h"
-#include "src/core/lib/transport/transport_fwd.h"
 
-struct grpc_server_config_fetcher;
+#define GRPC_ARG_SERVER_MAX_PENDING_REQUESTS "grpc.server.max_pending_requests"
+#define GRPC_ARG_SERVER_MAX_PENDING_REQUESTS_HARD_LIMIT \
+  "grpc.server.max_pending_requests_hard_limit"
 
 namespace grpc_core {
 
@@ -139,10 +146,12 @@ class Server : public InternallyRefCounted<Server>,
     return config_fetcher_.get();
   }
 
-  void set_config_fetcher(
-      std::unique_ptr<grpc_server_config_fetcher> config_fetcher) {
-    config_fetcher_ = std::move(config_fetcher);
+  ServerCallTracerFactory* server_call_tracer_factory() const {
+    return server_call_tracer_factory_;
   }
+
+  void set_config_fetcher(
+      std::unique_ptr<grpc_server_config_fetcher> config_fetcher);
 
   bool HasOpenConnections() ABSL_LOCKS_EXCLUDED(mu_global_);
 
@@ -158,7 +167,7 @@ class Server : public InternallyRefCounted<Server>,
   // the server.  Called from the listener when a new connection is accepted.
   // Takes ownership of a ref on resource_user from the caller.
   grpc_error_handle SetupTransport(
-      grpc_transport* transport, grpc_pollset* accepting_pollset,
+      Transport* transport, grpc_pollset* accepting_pollset,
       const ChannelArgs& args,
       const RefCountedPtr<channelz::SocketNode>& socket_node);
 
@@ -203,6 +212,18 @@ class Server : public InternallyRefCounted<Server>,
   struct RequestedCall;
 
   struct ChannelRegisteredMethod {
+    ChannelRegisteredMethod() = default;
+    ChannelRegisteredMethod(RegisteredMethod* server_registered_method_arg,
+                            uint32_t flags_arg, bool has_host_arg,
+                            Slice method_arg, Slice host_arg)
+        : server_registered_method(server_registered_method_arg),
+          flags(flags_arg),
+          has_host(has_host_arg),
+          method(std::move(method_arg)),
+          host(std::move(host_arg)) {}
+
+    ~ChannelRegisteredMethod() = default;
+
     RegisteredMethod* server_registered_method = nullptr;
     uint32_t flags;
     bool has_host;
@@ -211,7 +232,8 @@ class Server : public InternallyRefCounted<Server>,
   };
 
   class RequestMatcherInterface;
-  class RealRequestMatcher;
+  class RealRequestMatcherFilterStack;
+  class RealRequestMatcherPromises;
   class AllocatingRequestMatcherBase;
   class AllocatingRequestMatcherBatch;
   class AllocatingRequestMatcherRegistered;
@@ -223,8 +245,7 @@ class Server : public InternallyRefCounted<Server>,
 
     void InitTransport(RefCountedPtr<Server> server,
                        RefCountedPtr<Channel> channel, size_t cq_idx,
-                       grpc_transport* transport,
-                       intptr_t channelz_socket_uuid);
+                       Transport* transport, intptr_t channelz_socket_uuid);
 
     RefCountedPtr<Server> server() const { return server_; }
     Channel* channel() const { return channel_.get(); }
@@ -233,6 +254,8 @@ class Server : public InternallyRefCounted<Server>,
     ChannelRegisteredMethod* GetRegisteredMethod(const grpc_slice& host,
                                                  const grpc_slice& path);
 
+    ChannelRegisteredMethod* GetRegisteredMethod(const absl::string_view& host,
+                                                 const absl::string_view& path);
     // Filter vtable functions.
     static grpc_error_handle InitChannelElement(
         grpc_channel_element* elem, grpc_channel_element_args* args);
@@ -243,12 +266,25 @@ class Server : public InternallyRefCounted<Server>,
    private:
     class ConnectivityWatcher;
 
-    static void AcceptStream(void* arg, grpc_transport* /*transport*/,
+    static void AcceptStream(void* arg, Transport* /*transport*/,
                              const void* transport_server_data);
+    static void SetRegisteredMethodOnMetadata(void* arg,
+                                              ServerMetadata* metadata);
 
     void Destroy() ABSL_EXCLUSIVE_LOCKS_REQUIRED(server_->mu_global_);
 
     static void FinishDestroy(void* arg, grpc_error_handle error);
+
+    struct StringViewStringViewPairHash
+        : absl::flat_hash_set<
+              std::pair<absl::string_view, absl::string_view>>::hasher {
+      using is_transparent = void;
+    };
+
+    struct StringViewStringViewPairEq
+        : std::equal_to<std::pair<absl::string_view, absl::string_view>> {
+      using is_transparent = void;
+    };
 
     RefCountedPtr<Server> server_;
     RefCountedPtr<Channel> channel_;
@@ -260,7 +296,14 @@ class Server : public InternallyRefCounted<Server>,
     // TODO(vjpai): Convert this to an STL map type as opposed to a direct
     // bucket implementation. (Consider performance impact, hash function to
     // use, etc.)
-    std::unique_ptr<std::vector<ChannelRegisteredMethod>> registered_methods_;
+    std::unique_ptr<std::vector<ChannelRegisteredMethod>>
+        old_registered_methods_;
+    // Map of registered methods.
+    absl::flat_hash_map<std::pair<std::string, std::string> /*host, method*/,
+                        std::unique_ptr<ChannelRegisteredMethod>,
+                        StringViewStringViewPairHash,
+                        StringViewStringViewPairEq>
+        registered_methods_;
     uint32_t registered_method_max_probes_;
     grpc_closure finish_destroy_channel_closure_;
     intptr_t channelz_socket_uuid_;
@@ -411,24 +454,13 @@ class Server : public InternallyRefCounted<Server>,
     if (shutdown_refs_.fetch_sub(2, std::memory_order_acq_rel) == 2) {
       MutexLock lock(&mu_global_);
       MaybeFinishShutdown();
-      // The last request in-flight during shutdown is now complete.
-      if (requests_complete_ != nullptr) {
-        GPR_ASSERT(!requests_complete_->HasBeenNotified());
-        requests_complete_->Notify();
-      }
     }
   }
-  // Returns a notification pointer to wait on if there are requests in-flight,
-  // or null.
-  Notification* ShutdownUnrefOnShutdownCall()
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_global_) GRPC_MUST_USE_RESULT {
+  void ShutdownUnrefOnShutdownCall() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_global_) {
     if (shutdown_refs_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
       // There is no request in-flight.
       MaybeFinishShutdown();
-      return nullptr;
     }
-    requests_complete_ = std::make_unique<Notification>();
-    return requests_complete_.get();
   }
 
   bool ShutdownCalled() const {
@@ -445,6 +477,7 @@ class Server : public InternallyRefCounted<Server>,
   ChannelArgs const channel_args_;
   RefCountedPtr<channelz::ServerNode> channelz_node_;
   std::unique_ptr<grpc_server_config_fetcher> config_fetcher_;
+  ServerCallTracerFactory* const server_call_tracer_factory_;
 
   std::vector<grpc_completion_queue*> cqs_;
   std::vector<grpc_pollset*> pollsets_;
@@ -479,7 +512,17 @@ class Server : public InternallyRefCounted<Server>,
   std::atomic<int> shutdown_refs_{1};
   bool shutdown_published_ ABSL_GUARDED_BY(mu_global_) = false;
   std::vector<ShutdownTag> shutdown_tags_ ABSL_GUARDED_BY(mu_global_);
-  std::unique_ptr<Notification> requests_complete_ ABSL_GUARDED_BY(mu_global_);
+
+  RandomEarlyDetection pending_backlog_protector_ ABSL_GUARDED_BY(mu_call_){
+      static_cast<uint64_t>(
+          std::max(0, channel_args_.GetInt(GRPC_ARG_SERVER_MAX_PENDING_REQUESTS)
+                          .value_or(1000))),
+      static_cast<uint64_t>(std::max(
+          0,
+          channel_args_.GetInt(GRPC_ARG_SERVER_MAX_PENDING_REQUESTS_HARD_LIMIT)
+              .value_or(3000)))};
+  Duration max_time_in_pending_queue_{Duration::Seconds(30)};
+  absl::BitGen bitgen_ ABSL_GUARDED_BY(mu_call_);
 
   std::list<ChannelData*> channels_;
 
@@ -523,5 +566,14 @@ struct grpc_server_config_fetcher {
   virtual void CancelWatch(WatcherInterface* watcher) = 0;
   virtual grpc_pollset_set* interested_parties() = 0;
 };
+
+namespace grpc_core {
+
+inline void Server::set_config_fetcher(
+    std::unique_ptr<grpc_server_config_fetcher> config_fetcher) {
+  config_fetcher_ = std::move(config_fetcher);
+}
+
+}  // namespace grpc_core
 
 #endif  // GRPC_SRC_CORE_LIB_SURFACE_SERVER_H

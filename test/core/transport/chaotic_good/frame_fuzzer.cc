@@ -15,8 +15,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <limits>
 #include <memory>
 
+#include "absl/random/bit_gen_ref.h"
 #include "absl/status/statusor.h"
 
 #include <grpc/event_engine/memory_allocator.h>
@@ -27,6 +29,7 @@
 #include "src/core/ext/transport/chttp2/transport/hpack_encoder.h"
 #include "src/core/ext/transport/chttp2/transport/hpack_parser.h"
 #include "src/core/lib/gprpp/ref_counted_ptr.h"
+#include "src/core/lib/iomgr/exec_ctx.h"
 #include "src/core/lib/resource_quota/arena.h"
 #include "src/core/lib/resource_quota/memory_quota.h"
 #include "src/core/lib/resource_quota/resource_quota.h"
@@ -39,20 +42,27 @@ bool squelch = false;
 namespace grpc_core {
 namespace chaotic_good {
 
+struct DeterministicBitGen : public std::numeric_limits<uint64_t> {
+  using result_type = uint64_t;
+  uint64_t operator()() { return 42; }
+};
+
 template <typename T>
 void AssertRoundTrips(const T& input, FrameType expected_frame_type) {
   HPackCompressor hpack_compressor;
   auto serialized = input.Serialize(&hpack_compressor);
-  GPR_ASSERT(serialized.Length() >= 64);
-  GPR_ASSERT(serialized.Length() % 64 == 0);
-  uint8_t header_bytes[64];
-  serialized.MoveFirstNBytesIntoBuffer(64, header_bytes);
+  GPR_ASSERT(serialized.Length() >=
+             24);  // Initial output buffer size is 64 byte.
+  uint8_t header_bytes[24];
+  serialized.MoveFirstNBytesIntoBuffer(24, header_bytes);
   auto header = FrameHeader::Parse(header_bytes);
   GPR_ASSERT(header.ok());
   GPR_ASSERT(header->type == expected_frame_type);
   T output;
   HPackParser hpack_parser;
-  auto deser = output.Deserialize(&hpack_parser, header.value(), serialized);
+  DeterministicBitGen bitgen;
+  auto deser = output.Deserialize(&hpack_parser, header.value(),
+                                  absl::BitGenRef(bitgen), serialized);
   GPR_ASSERT(deser.ok());
   GPR_ASSERT(output == input);
 }
@@ -61,10 +71,13 @@ template <typename T>
 void FinishParseAndChecks(const FrameHeader& header, const uint8_t* data,
                           size_t size) {
   T parsed;
+  ExecCtx exec_ctx;  // Initialized to get this_cpu() info in global_stat().
   HPackParser hpack_parser;
   SliceBuffer serialized;
   serialized.Append(Slice::FromCopiedBuffer(data, size));
-  auto deser = parsed.Deserialize(&hpack_parser, header, serialized);
+  DeterministicBitGen bitgen;
+  auto deser = parsed.Deserialize(&hpack_parser, header,
+                                  absl::BitGenRef(bitgen), serialized);
   if (!deser.ok()) return;
   AssertRoundTrips(parsed, header.type);
 }
@@ -74,11 +87,11 @@ int Run(const uint8_t* data, size_t size) {
   const bool is_server = (data[0] & 1) != 0;
   size--;
   data++;
-  if (size < 64) return 0;
+  if (size < 24) return 0;
   auto r = FrameHeader::Parse(data);
   if (!r.ok()) return 0;
-  size -= 64;
-  data += 64;
+  size -= 24;
+  data += 24;
   MemoryAllocator memory_allocator = MemoryAllocator(
       ResourceQuota::Default()->memory_quota()->CreateMemoryAllocator("test"));
   auto arena = MakeScopedArena(1024, &memory_allocator);

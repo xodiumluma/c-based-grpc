@@ -17,7 +17,7 @@
 
 #include <grpc/support/port_platform.h>
 
-#include <type_traits>
+#include <memory>
 #include <utility>
 
 #include "absl/meta/type_traits.h"
@@ -106,6 +106,9 @@ class Curried {
  private:
   GPR_NO_UNIQUE_ADDRESS F f_;
   GPR_NO_UNIQUE_ADDRESS Arg arg_;
+#ifndef NDEBUG
+  std::unique_ptr<int> asan_canary_ = std::make_unique<int>(0);
+#endif
 };
 
 // Promote a callable(A) -> T | Poll<T> to a PromiseFactory(A) -> Promise<T> by
@@ -165,7 +168,7 @@ absl::enable_if_t<IsVoidCallable<ResultOf<F()>>::value,
                   PromiseLike<decltype(std::declval<F>()())>>
 PromiseFactoryImpl(F&& f) {
   return f();
-};
+}
 
 template <typename A, typename F>
 class OncePromiseFactory {

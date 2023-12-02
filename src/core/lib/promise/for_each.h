@@ -20,16 +20,13 @@
 #include <stdint.h>
 
 #include <string>
-#include <type_traits>
 #include <utility>
 
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
-#include "absl/types/variant.h"
 
 #include <grpc/support/log.h>
 
-#include "src/core/lib/debug/trace.h"
 #include "src/core/lib/gprpp/construct_destruct.h"
 #include "src/core/lib/promise/activity.h"
 #include "src/core/lib/promise/detail/promise_factory.h"
@@ -118,7 +115,7 @@ class ForEach {
       gpr_log(GPR_DEBUG, "%s PollReaderNext", DebugTag().c_str());
     }
     auto r = reader_next_();
-    if (auto* p = absl::get_if<kPollReadyIdx>(&r)) {
+    if (auto* p = r.value_if_ready()) {
       if (grpc_trace_promise_primitives.enabled()) {
         gpr_log(GPR_DEBUG, "%s PollReaderNext: got has_value=%s",
                 DebugTag().c_str(), p->has_value() ? "true" : "false");
@@ -141,7 +138,7 @@ class ForEach {
       gpr_log(GPR_DEBUG, "%s PollAction", DebugTag().c_str());
     }
     auto r = in_action_.promise();
-    if (auto* p = absl::get_if<kPollReadyIdx>(&r)) {
+    if (auto* p = r.value_if_ready()) {
       if (p->ok()) {
         Destruct(&in_action_);
         Construct(&reader_next_, reader_.Next());

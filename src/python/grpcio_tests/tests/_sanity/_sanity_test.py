@@ -20,26 +20,30 @@ import tests
 
 
 class SanityTest(unittest.TestCase):
-
     maxDiff = 32768
 
-    TEST_PKG_MODULE_NAME = 'tests'
-    TEST_PKG_PATH = 'tests'
+    TEST_PKG_MODULE_NAME = "tests"
+    TEST_PKG_PATH = "tests"
 
     def testTestsJsonUpToDate(self):
         """Autodiscovers all test suites and checks that tests.json is up to date"""
         loader = tests.Loader()
         loader.loadTestsFromNames([self.TEST_PKG_MODULE_NAME])
-        test_suite_names = sorted({
-            test_case_class.id().rsplit('.', 1)[0] for test_case_class in
-            tests._loader.iterate_suite_cases(loader.suite)
-        })
+        test_suite_names = sorted(
+            {
+                test_case_class.id().rsplit(".", 1)[0]
+                for test_case_class in tests._loader.iterate_suite_cases(
+                    loader.suite
+                )
+            }
+        )
 
-        tests_json_string = pkgutil.get_data(self.TEST_PKG_PATH, 'tests.json')
-        tests_json = tests_json_string.decode()
+        tests_json_string = pkgutil.get_data(self.TEST_PKG_PATH, "tests.json")
+        tests_json = json.loads(tests_json_string.decode())
 
         self.assertSequenceEqual(tests_json, test_suite_names)
+        self.assertGreater(len(test_suite_names), 0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

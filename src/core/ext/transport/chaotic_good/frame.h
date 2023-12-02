@@ -21,6 +21,7 @@
 #include <memory>
 #include <string>
 
+#include "absl/random/bit_gen_ref.h"
 #include "absl/status/status.h"
 #include "absl/types/variant.h"
 
@@ -39,6 +40,7 @@ class FrameInterface {
  public:
   virtual absl::Status Deserialize(HPackParser* parser,
                                    const FrameHeader& header,
+                                   absl::BitGenRef bitsrc,
                                    SliceBuffer& slice_buffer) = 0;
   virtual SliceBuffer Serialize(HPackCompressor* encoder) const = 0;
 
@@ -62,6 +64,7 @@ class FrameInterface {
 
 struct SettingsFrame final : public FrameInterface {
   absl::Status Deserialize(HPackParser* parser, const FrameHeader& header,
+                           absl::BitGenRef bitsrc,
                            SliceBuffer& slice_buffer) override;
   SliceBuffer Serialize(HPackCompressor* encoder) const override;
 
@@ -70,39 +73,42 @@ struct SettingsFrame final : public FrameInterface {
 
 struct ClientFragmentFrame final : public FrameInterface {
   absl::Status Deserialize(HPackParser* parser, const FrameHeader& header,
+                           absl::BitGenRef bitsrc,
                            SliceBuffer& slice_buffer) override;
   SliceBuffer Serialize(HPackCompressor* encoder) const override;
 
-  uint32_t stream_id;
+  FrameHeader frame_header;
   ClientMetadataHandle headers;
   MessageHandle message;
   bool end_of_stream = false;
 
   bool operator==(const ClientFragmentFrame& other) const {
-    return stream_id == other.stream_id && EqHdl(headers, other.headers) &&
-           EqHdl(message, other.message) &&
+    return frame_header.stream_id == other.frame_header.stream_id &&
+           EqHdl(headers, other.headers) &&
            end_of_stream == other.end_of_stream;
   }
 };
 
 struct ServerFragmentFrame final : public FrameInterface {
   absl::Status Deserialize(HPackParser* parser, const FrameHeader& header,
+                           absl::BitGenRef bitsrc,
                            SliceBuffer& slice_buffer) override;
   SliceBuffer Serialize(HPackCompressor* encoder) const override;
 
-  uint32_t stream_id;
+  FrameHeader frame_header;
   ServerMetadataHandle headers;
   MessageHandle message;
   ServerMetadataHandle trailers;
 
   bool operator==(const ServerFragmentFrame& other) const {
-    return stream_id == other.stream_id && EqHdl(headers, other.headers) &&
-           EqHdl(message, other.message) && EqHdl(trailers, other.trailers);
+    return frame_header.stream_id == other.frame_header.stream_id &&
+           EqHdl(headers, other.headers) && EqHdl(trailers, other.trailers);
   }
 };
 
 struct CancelFrame final : public FrameInterface {
   absl::Status Deserialize(HPackParser* parser, const FrameHeader& header,
+                           absl::BitGenRef bitsrc,
                            SliceBuffer& slice_buffer) override;
   SliceBuffer Serialize(HPackCompressor* encoder) const override;
 

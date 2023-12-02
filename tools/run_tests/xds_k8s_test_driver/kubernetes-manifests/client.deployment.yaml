@@ -28,7 +28,13 @@ spec:
       - name: ${deployment_name}
         image: ${image_name}
         imagePullPolicy: Always
-        restartPolicy: Never
+        startupProbe:
+          tcpSocket:
+            port: ${stats_port}
+          periodSeconds: 3
+          ## Extend the number of probes well beyond the duration of the test
+          ## driver waiting for the container to start.
+          failureThreshold: 1000
         args:
           - "--server=${server_target}"
           - "--stats_port=${stats_port}"
@@ -45,9 +51,11 @@ spec:
             value: "true"
           - name: GRPC_XDS_EXPERIMENTAL_ENABLE_RETRY
             value: "true"
+          - name: GRPC_EXPERIMENTAL_ENABLE_OUTLIER_DETECTION
+            value: "true"
           - name: GRPC_EXPERIMENTAL_XDS_CUSTOM_LB_CONFIG
             value: "true"
-          - name: GRPC_EXPERIMENTAL_ENABLE_OUTLIER_DETECTION
+          - name: GRPC_EXPERIMENTAL_XDS_ENABLE_OVERRIDE_HOST
             value: "true"
         volumeMounts:
           - mountPath: /tmp/grpc-xds/
@@ -72,6 +80,9 @@ spec:
             % endif
             % if config_mesh:
             - "--config-mesh-experimental=${config_mesh}"
+            % endif
+            % if generate_mesh_id:
+            - "--generate-mesh-id-experimental"
             % endif
           resources:
             limits:
